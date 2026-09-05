@@ -12,7 +12,9 @@ pub use geario_macros::{rt_main as main, rt_test as test};
 
 pub mod bytes;
 pub mod codec;
+pub mod dispatcher;
 pub mod error;
+pub mod io;
 pub mod rt;
 pub mod service;
 pub mod util;
