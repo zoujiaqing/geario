@@ -49,6 +49,22 @@ Only one runtime feature may be enabled at a time; `build.rs` enforces this.
 
 Rust 1.95 or newer, edition 2024.
 
+## Features
+
+| Feature | Default | What it pulls in |
+| --- | --- | --- |
+| `http1` | yes | HTTP/1.1 codec, decoder, encoder |
+| `server` | yes | `HttpService`, dispatcher, control service |
+| `client` | no | `Client`, request builder, connection pool |
+| `full` | no | `http1` + `server` + `client` |
+| `compress` | no | gzip/deflate transfer encoding |
+| `cookie` | no | cookie parsing and building |
+
+A server-only build is about 46% smaller than `full`, which matters when
+the library is linked into an FFI target.
+
+Reserved but not implemented: `http2`, `openssl`, `rustls`, `ws`, `test-server`.
+
 ## License
 
 MIT OR Apache-2.0, matching upstream ntex. See `NOTICE` for attribution.

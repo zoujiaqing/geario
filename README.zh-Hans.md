@@ -48,6 +48,21 @@ HTTP 协议层在独立的 `geario-http` 中，目前支持 HTTP/1.1。
 
 Rust 1.95 或更高，edition 2024。
 
+## Feature
+
+| Feature | 默认 | 内容 |
+| --- | --- | --- |
+| `http1` | 是 | HTTP/1.1 codec、decoder、encoder |
+| `server` | 是 | `HttpService`、dispatcher、control service |
+| `client` | 否 | `Client`、请求构建器、连接池 |
+| `full` | 否 | `http1` + `server` + `client` |
+| `compress` | 否 | gzip/deflate 传输编码 |
+| `cookie` | 否 | cookie 解析与构建 |
+
+只开 server 的构建比 `full` 小约 46%，这在把库链进 FFI 目标时是实际收益。
+
+已预留但尚未实现：`http2`、`openssl`、`rustls`、`ws`、`test-server`。
+
 ## 许可证
 
 MIT OR Apache-2.0，与上游 ntex 一致。归属信息见 `NOTICE`。
