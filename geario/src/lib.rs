@@ -11,3 +11,4 @@ extern crate self as geario;
 pub use geario_macros::{rt_main as main, rt_test as test};
 
 pub mod bytes;
+pub mod service;

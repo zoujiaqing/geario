@@ -1,0 +1,509 @@
+use std::{cell, fmt, future, marker, pin, rc::Rc, task::Context, task::Poll, task::Waker};
+
+use crate::service::Service;
+
+pub struct Ctx<'a, Svc: ?Sized, St = ()> {
+    idx: u32,
+    st: &'a St,
+    waiters: &'a WaitersRef,
+    _t: marker::PhantomData<Rc<Svc>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct WaitersRef {
+    cur: cell::Cell<u32>,
+    running: cell::Cell<bool>,
+    shutdown: cell::Cell<bool>,
+    wakers: cell::UnsafeCell<Vec<u32>>,
+    indexes: cell::UnsafeCell<slab::Slab<Option<Waker>>>,
+}
+
+impl WaitersRef {
+    pub(crate) fn new() -> Self {
+        let mut waiters = slab::Slab::with_capacity(16);
+        waiters.insert(None);
+        WaitersRef {
+            cur: cell::Cell::new(u32::MAX),
+            running: cell::Cell::new(false),
+            shutdown: cell::Cell::new(false),
+            indexes: cell::UnsafeCell::new(waiters),
+            wakers: cell::UnsafeCell::new(Vec::default()),
+        }
+    }
+
+    #[allow(clippy::mut_from_ref)]
+    pub(crate) fn get(&self) -> &mut slab::Slab<Option<Waker>> {
+        unsafe { &mut *self.indexes.get() }
+    }
+
+    #[allow(clippy::mut_from_ref)]
+    pub(crate) fn get_wakers(&self) -> &mut Vec<u32> {
+        unsafe { &mut *self.wakers.get() }
+    }
+
+    pub(crate) fn insert(&self) -> u32 {
+        self.get().insert(None) as u32
+    }
+
+    pub(crate) fn remove(&self, idx: u32) {
+        self.get().remove(idx as usize);
+
+        if self.cur.get() == idx {
+            self.notify();
+        }
+    }
+
+    pub(crate) fn notify(&self) {
+        let wakers = self.get_wakers();
+        if !wakers.is_empty() {
+            let indexes = self.get();
+            for idx in wakers.drain(..) {
+                if let Some(item) = indexes.get_mut(idx as usize)
+                    && let Some(waker) = item.take()
+                {
+                    waker.wake();
+                }
+            }
+        }
+
+        self.cur.set(u32::MAX);
+    }
+
+    pub(crate) fn run<F, R>(&self, idx: u32, cx: &mut Context<'_>, f: F) -> Poll<R>
+    where
+        F: FnOnce(&mut Context<'_>) -> Poll<R>,
+    {
+        // Ctx::poll_xxx() methods requires current waker always available
+        self.get()[idx as usize] = Some(cx.waker().clone());
+
+        // calculate owner for readiness check
+        let cur = self.cur.get();
+        let can_check = if cur == idx {
+            true
+        } else if cur == u32::MAX {
+            self.cur.set(idx);
+            true
+        } else {
+            false
+        };
+
+        if can_check {
+            // only one readiness check can manage waiters
+            let initial_run = !self.running.get();
+            if initial_run {
+                self.running.set(true);
+            }
+
+            let result = f(cx);
+
+            if initial_run {
+                if result.is_pending() {
+                    self.get_wakers().push(idx);
+                } else {
+                    self.notify();
+                }
+                self.running.set(false);
+            }
+            result
+        } else {
+            // other pipeline ownes readiness check process
+            self.get_wakers().push(idx);
+            Poll::Pending
+        }
+    }
+
+    pub(crate) fn shutdown(&self) {
+        self.shutdown.set(true);
+    }
+
+    pub(crate) fn is_shutdown(&self) -> bool {
+        self.shutdown.get()
+    }
+}
+
+impl<'a, Svc, St> Ctx<'a, Svc, St> {
+    pub(crate) fn new(idx: u32, waiters: &'a WaitersRef, st: &'a St) -> Self {
+        Self {
+            idx,
+            waiters,
+            st,
+            _t: marker::PhantomData,
+        }
+    }
+
+    pub(crate) fn inner(self) -> (u32, &'a WaitersRef, &'a St) {
+        (self.idx, self.waiters, self.st)
+    }
+
+    #[inline]
+    /// Unique id for this pipeline
+    pub fn id(&self) -> u32 {
+        self.idx
+    }
+
+    #[inline]
+    /// Application state
+    pub fn st(&'a self) -> &'a St {
+        self.st
+    }
+
+    /// Returns when the service is able to process requests.
+    pub async fn ready<S, Req>(&self, svc: &'a S) -> Result<(), S::Error>
+    where
+        S: Service<St, Req>,
+    {
+        // check readiness and notify waiters
+        ReadyCall {
+            completed: false,
+            fut: svc.ready(Ctx {
+                st: self.st,
+                idx: self.idx,
+                waiters: self.waiters,
+                _t: marker::PhantomData,
+            }),
+            idx: self.idx,
+            waiters: self.waiters,
+        }
+        .await
+    }
+
+    #[inline]
+    /// Wait for service readiness and then call service
+    pub async fn call<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
+    where
+        S: Service<St, Req>,
+    {
+        self.ready(svc).await?;
+
+        svc.call(
+            req,
+            Ctx {
+                idx: self.idx,
+                st: self.st,
+                waiters: self.waiters,
+                _t: marker::PhantomData,
+            },
+        )
+        .await
+    }
+
+    #[inline]
+    /// Call service, do not check service readiness
+    pub async fn call_nowait<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
+    where
+        S: Service<St, Req>,
+    {
+        svc.call(
+            req,
+            Ctx {
+                st: self.st,
+                idx: self.idx,
+                waiters: self.waiters,
+                _t: marker::PhantomData,
+            },
+        )
+        .await
+    }
+
+    #[inline]
+    /// Execute a closure until completion with the dispatcher's task `Context`.
+    pub async fn poll_fn<F, R>(&'a self, f: F) -> R
+    where
+        F: Fn(&mut Context<'a>) -> Poll<R>,
+    {
+        future::poll_fn(move |_| {
+            let wakers = self.waiters.get();
+            let idx = self.waiters.cur.get() as usize;
+            let mut ctx = if let Some(w) = wakers.get(idx).and_then(|w| w.as_ref()) {
+                Context::from_waker(w)
+            } else {
+                Context::from_waker(Waker::noop())
+            };
+
+            // is current runner is not main, we need to wake up main task
+            // to re-register all required wakers
+            if idx != 0 {
+                self.waiters.get_wakers().push(0);
+            }
+
+            f(&mut ctx)
+        })
+        .await
+    }
+
+    #[inline]
+    /// Execute a closure with the dispatcher's task `Context`.
+    pub fn poll_once<F, R>(&'a self, f: F) -> R
+    where
+        F: FnOnce(&mut Context<'a>) -> R,
+    {
+        let wakers = self.waiters.get();
+        let idx = self.waiters.cur.get() as usize;
+        let mut ctx = if let Some(w) = wakers.get(idx).and_then(|w| w.as_ref()) {
+            Context::from_waker(w)
+        } else {
+            Context::from_waker(Waker::noop())
+        };
+
+        // is current runner is not main, we need to wake up main task
+        // to re-register all required wakers
+        if idx != 0 {
+            self.waiters.get_wakers().push(0);
+        }
+
+        f(&mut ctx)
+    }
+
+    #[inline]
+    /// Shutdown service
+    pub async fn shutdown<S, Req>(&self, svc: &'a S)
+    where
+        S: Service<St, Req>,
+    {
+        svc.shutdown(Ctx {
+            idx: self.idx,
+            st: self.st,
+            waiters: self.waiters,
+            _t: marker::PhantomData,
+        })
+        .await;
+    }
+
+    #[inline]
+    /// Map context state
+    pub fn map_state<NewSt>(&'a self, st: &'a NewSt) -> Ctx<'a, Self, NewSt> {
+        Ctx {
+            st,
+            idx: self.idx,
+            waiters: self.waiters,
+            _t: marker::PhantomData,
+        }
+    }
+}
+
+impl<S, St> Copy for Ctx<'_, S, St> {}
+
+impl<S, St> Clone for Ctx<'_, S, St> {
+    #[inline]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S, St> fmt::Debug for Ctx<'_, S, St> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Ctx")
+            .field("idx", &self.idx)
+            .field("waiters", &self.waiters.get().len())
+            .finish()
+    }
+}
+
+struct ReadyCall<'a, F: future::Future> {
+    completed: bool,
+    fut: F,
+    idx: u32,
+    waiters: &'a WaitersRef,
+}
+
+impl<F: future::Future> Drop for ReadyCall<'_, F> {
+    fn drop(&mut self) {
+        if !self.completed && self.waiters.cur.get() == self.idx {
+            self.waiters.notify();
+        }
+    }
+}
+
+impl<F: future::Future> Unpin for ReadyCall<'_, F> {}
+
+impl<F: future::Future> future::Future for ReadyCall<'_, F> {
+    type Output = F::Output;
+
+    fn poll(mut self: pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.waiters.run(self.idx, cx, |cx| {
+            // SAFETY: `fut` never moves
+            let result = unsafe { pin::Pin::new_unchecked(&mut self.as_mut().fut).poll(cx) };
+            if result.is_ready() {
+                self.completed = true;
+            }
+            result
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::Cell, cell::RefCell, future::poll_fn};
+
+    use crate::util::channel::{condition, oneshot};
+    use crate::rt::spawn;
+    use crate::util::time;
+    use crate::util::future::{lazy, select};
+
+    use super::*;
+    use crate::service::Pipeline;
+
+    struct Srv(Rc<Cell<usize>>, condition::Waiter);
+
+    impl Service<(), &'static str> for Srv {
+        type Res = &'static str;
+        type Error = ();
+
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
+            self.0.set(self.0.get() + 1);
+            self.1.ready().await;
+            Ok(())
+        }
+
+        async fn call(
+            &self,
+            req: &'static str,
+            ctx: Ctx<'_, Self>,
+        ) -> Result<Self::Res, Self::Error> {
+            let _ = format!("{ctx:?}");
+            let _ = format!("{:?}", ctx.id());
+            #[allow(clippy::clone_on_copy)]
+            let _ = ctx.clone();
+            Ok(req)
+        }
+    }
+
+    #[geario::test]
+    async fn test_ready() {
+        let cnt = Rc::new(Cell::new(0));
+        let con = condition::Condition::new();
+
+        let srv = Pipeline::with((), Srv(cnt.clone(), con.wait()));
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Pending);
+        assert_eq!(cnt.get(), 1);
+
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Pending);
+        assert_eq!(cnt.get(), 1);
+
+        con.notify();
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Ready(Ok(())));
+        assert_eq!(cnt.get(), 1);
+
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Pending);
+        assert_eq!(cnt.get(), 2);
+
+        con.notify();
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Ready(Ok(())));
+        assert_eq!(cnt.get(), 2);
+
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Pending);
+        assert_eq!(cnt.get(), 3);
+    }
+
+    #[geario::test]
+    async fn test_ready_on_drop() {
+        let cnt = Rc::new(Cell::new(0));
+        let con = condition::Condition::new();
+        let srv = Pipeline::with((), Srv(cnt.clone(), con.wait()));
+
+        let srv1 = srv.bind();
+        let (tx, rx) = oneshot::channel();
+        spawn(async move {
+            select(rx, srv1.ready()).await;
+            time::sleep(time::Millis(25000)).await;
+        });
+        time::sleep(time::Millis(250)).await;
+
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Pending);
+
+        let _ = tx.send(());
+        time::sleep(time::Millis(250)).await;
+
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Pending);
+
+        con.notify();
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Ready(Ok(())));
+    }
+
+    #[geario::test]
+    async fn test_ready_after_shutdown() {
+        let cnt = Rc::new(Cell::new(0));
+        let con = condition::Condition::new();
+        let srv = Pipeline::with((), Srv(cnt.clone(), con.wait()));
+
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Pending);
+
+        let (tx, rx) = oneshot::channel();
+        let (tx2, rx2) = oneshot::channel();
+        spawn(async move {
+            select(rx, srv.ready()).await;
+            srv.shutdown().await;
+            let _ = tx2.send(srv);
+        });
+        time::sleep(time::Millis(250)).await;
+
+        let _ = tx.send(());
+        let srv = rx2.await.unwrap();
+
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Ready(Ok(())));
+
+        con.notify();
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Ready(Ok(())));
+    }
+
+    #[geario::test]
+    async fn test_pipeline_binding_after_shutdown() {
+        let cnt = Rc::new(Cell::new(0));
+        let con = condition::Condition::new();
+        let srv = Pipeline::with((), Srv(cnt.clone(), con.wait()));
+        poll_fn(|cx| srv.poll_shutdown(cx)).await;
+        let _ = poll_fn(|cx| srv.poll_ready(cx)).await;
+    }
+
+    #[geario::test]
+    async fn test_shared_call() {
+        let data = Rc::new(RefCell::new(Vec::new()));
+
+        let cnt = Rc::new(Cell::new(0));
+        let con = condition::Condition::new();
+
+        let srv = Pipeline::with((), Srv(cnt.clone(), con.wait()));
+
+        let srv1 = srv.bind();
+        let data1 = data.clone();
+        crate::rt::spawn(async move {
+            let _ = srv1.ready().await;
+            let fut = srv1.call_nowait("srv1");
+            assert!(format!("{fut:?}").contains("PipelineCall"));
+            let i = fut.await.unwrap();
+            data1.borrow_mut().push(i);
+        });
+
+        let srv2 = srv.bind();
+        let data2 = data.clone();
+        crate::rt::spawn(async move {
+            let i = srv2.call("srv2").await.unwrap();
+            data2.borrow_mut().push(i);
+        });
+        time::sleep(time::Millis(50)).await;
+
+        con.notify();
+        time::sleep(time::Millis(150)).await;
+
+        assert_eq!(cnt.get(), 2);
+        assert_eq!(&*data.borrow(), &["srv1"]);
+
+        con.notify();
+        time::sleep(time::Millis(150)).await;
+
+        assert_eq!(cnt.get(), 2);
+        assert_eq!(&*data.borrow(), &["srv1", "srv2"]);
+    }
+}

@@ -22,13 +22,15 @@ workspace = true
 default = []
 trace = []
 simd = ["simdutf8"]
-overuse = ["backtrace", "log"]
+overuse = ["backtrace"]
 
 [dependencies]
 geario-macros = { workspace = true }
 bytes = { workspace = true }
+foldhash = { workspace = true }
+log = { workspace = true }
+slab = { workspace = true }
 serde = { workspace = true }
-log = { workspace = true, optional = true }
 simdutf8 = { workspace = true, optional = true }
 backtrace = { workspace = true, optional = true }
 
