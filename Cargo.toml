@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["geario", "geario-macros", "geario-http"]
+exclude = ["bench-echo"]
 
 [workspace.package]
 authors = ["zoujiaqing <zoujiaqing@gmail.com>"]

@@ -1,0 +1,16 @@
+[package]
+name = "server-ntex"
+version = "0.1.0"
+edition = "2024"
+
+# Depends on the ntex sub-crates rather than on ntex itself: the ntex crate
+# does not build at the fork point, because ntex-h2 is out of sync with it.
+[dependencies]
+ntex-io = { path = "../../../ntex/ntex-io" }
+ntex-net = { path = "../../../ntex/ntex-net" }
+ntex-rt = { path = "../../../ntex/ntex-rt" }
+ntex-server = { path = "../../../ntex/ntex-server" }
+ntex-service = { path = "../../../ntex/ntex-service" }
+ntex-codec = { path = "../../../ntex/ntex-codec" }
+ntex-util = { path = "../../../ntex/ntex-util" }
+ntex-error = { path = "../../../ntex/ntex-error" }

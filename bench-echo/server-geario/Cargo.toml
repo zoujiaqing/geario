@@ -1,0 +1,7 @@
+[package]
+name = "server-geario"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+geario = { path = "../../geario" }

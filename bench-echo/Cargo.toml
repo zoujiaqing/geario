@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["server-geario", "server-ntex", "client"]
+
+# ntex's sub-crates depend on each other through workspace version numbers that
+# resolve to crates.io. Without these redirects a local ntex-util gets built
+# against a published ntex-service and the trait arities disagree.
+[patch.crates-io]
+ntex-bytes = { path = "../../ntex/ntex-bytes" }
+ntex-codec = { path = "../../ntex/ntex-codec" }
+ntex-error = { path = "../../ntex/ntex-error" }
+ntex-io = { path = "../../ntex/ntex-io" }
+ntex-dispatcher = { path = "../../ntex/ntex-dispatcher" }
+ntex-net = { path = "../../ntex/ntex-net" }
+ntex-http = { path = "../../ntex/ntex-http" }
+ntex-rt = { path = "../../ntex/ntex-rt" }
+ntex-server = { path = "../../ntex/ntex-server" }
+ntex-service = { path = "../../ntex/ntex-service" }
+ntex-util = { path = "../../ntex/ntex-util" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
