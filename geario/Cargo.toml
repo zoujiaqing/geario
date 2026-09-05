@@ -22,6 +22,9 @@ workspace = true
 default = []
 trace = []
 no-test-logging = []
+# TLS through rustls. aws-lc-rs is rustls's own default provider.
+rustls = ["tls_rustls", "tls_rustls/std", "tls_rustls/aws-lc-rs"]
+rustls-ring = ["tls_rustls", "tls_rustls/std", "tls_rustls/ring"]
 neon-polling = []
 neon-uring = []
 neon-iocp = []
@@ -40,6 +43,7 @@ cfg-if = { workspace = true }
 core_affinity = { workspace = true }
 uuid = { workspace = true }
 http = { workspace = true }
+tls_rustls = { workspace = true, optional = true }
 ntex-polling = { workspace = true }
 socket2 = { workspace = true, features = ["all"] }
 compio-buf = { workspace = true, optional = true }
@@ -96,4 +100,6 @@ derive_more = { workspace = true, features = ["debug", "display"] }
 futures-util = { workspace = true }
 oneshot = { workspace = true }
 serde_test = { workspace = true }
+rcgen = { workspace = true }
+rustls-pemfile = { workspace = true }
 serde_json = { workspace = true }
