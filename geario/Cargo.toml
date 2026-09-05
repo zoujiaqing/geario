@@ -21,6 +21,7 @@ workspace = true
 [features]
 default = []
 trace = []
+no-test-logging = []
 tokio = ["tok-io"]
 compio = ["compio-driver", "compio-runtime"]
 simd = ["simdutf8"]
@@ -31,6 +32,11 @@ geario-macros = { workspace = true }
 bytes = { workspace = true }
 foldhash = { workspace = true }
 thiserror = { workspace = true }
+bitflags = { workspace = true }
+env_logger = { workspace = true }
+futures-core = { workspace = true }
+hashbrown = { workspace = true, features = ["serde"] }
+pin-project-lite = { workspace = true }
 atomic-waker = { workspace = true }
 async-channel = { workspace = true }
 async-task = { workspace = true }
@@ -60,5 +66,9 @@ ctrlc = { workspace = true }
 
 [dev-dependencies]
 rand = { workspace = true }
+async-channel = { workspace = true }
+derive_more = { workspace = true, features = ["debug", "display"] }
+futures-util = { workspace = true }
+oneshot = { workspace = true }
 serde_test = { workspace = true }
 serde_json = { workspace = true }

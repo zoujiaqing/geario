@@ -1,0 +1,219 @@
+//! Service that limits number of in-flight async requests.
+use crate::service::{Ctx, Middleware, Service};
+
+use super::counter::Counter;
+
+/// `InFlight` - service factory for service that can limit number of in-flight
+/// async requests.
+///
+/// Default number of in-flight requests is 15
+#[derive(Copy, Clone, Debug)]
+pub struct InFlight {
+    max_inflight: usize,
+}
+
+impl InFlight {
+    pub fn new(max: usize) -> Self {
+        Self { max_inflight: max }
+    }
+}
+
+impl Default for InFlight {
+    fn default() -> Self {
+        Self::new(15)
+    }
+}
+
+impl<S, St, Cfg> Middleware<S, St, Cfg> for InFlight {
+    type Service = InFlightService<S>;
+
+    fn create(&self, service: S, _: &Cfg) -> Self::Service {
+        InFlightService {
+            service,
+            count: Counter::new(self.max_inflight),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct InFlightService<S> {
+    count: Counter,
+    service: S,
+}
+
+impl<S> InFlightService<S> {
+    pub fn new(max: usize, service: S) -> Self {
+        Self {
+            service,
+            count: Counter::new(max),
+        }
+    }
+}
+
+impl<S, St, Req> Service<St, Req> for InFlightService<S>
+where
+    S: Service<St, Req>,
+{
+    type Res = S::Res;
+    type Error = S::Error;
+
+    #[inline]
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
+        if self.count.is_available() {
+            ctx.ready(&self.service).await
+        } else {
+            crate::util::future::join(self.count.available(), ctx.ready(&self.service))
+                .await
+                .1
+        }
+    }
+
+    #[inline]
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
+        ctx.ready(self).await?;
+        let _guard = self.count.get();
+        ctx.call(&self.service, req).await
+    }
+
+    crate::forward_shutdown!(St, service);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::Cell, cell::RefCell, rc::Rc, task::Poll, time::Duration};
+
+    use async_channel as mpmc;
+    use crate::service::{Pipeline, apply, fn_factory};
+
+    use super::*;
+    use crate::util::{channel::oneshot, future::lazy};
+
+    struct SleepService(mpmc::Receiver<()>);
+
+    impl Service<(), ()> for SleepService {
+        type Res = ();
+        type Error = ();
+
+        async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<(), ()> {
+            let _ = self.0.recv().await;
+            Ok(())
+        }
+    }
+
+    #[geario::test]
+    async fn test_service() {
+        let (tx, rx) = mpmc::unbounded();
+        let counter = Rc::new(Cell::new(0));
+
+        let srv = Pipeline::with((), InFlightService::new(1, SleepService(rx)));
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        let counter2 = counter.clone();
+        let fut = srv.call_nowait(());
+        crate::rt::spawn(async move {
+            let _ = fut.await;
+            counter2.set(counter2.get() + 1);
+        });
+        crate::util::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+
+        let counter2 = counter.clone();
+        let fut = srv.call_nowait(());
+        crate::rt::spawn(async move {
+            let _ = fut.await;
+            counter2.set(counter2.get() + 1);
+        });
+        crate::util::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+
+        let counter2 = counter.clone();
+        let fut = srv.call_static(());
+        let (stx, srx) = oneshot::channel::<()>();
+        crate::rt::spawn(async move {
+            let _ = fut.await;
+            counter2.set(counter2.get() + 1);
+            let _ = stx.send(());
+        });
+        crate::util::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+
+        let _ = tx.send(()).await;
+        crate::util::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        let _ = tx.send(()).await;
+        crate::util::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+
+        let _ = tx.send(()).await;
+        let _ = srx.recv().await;
+        assert_eq!(counter.get(), 3);
+        srv.shutdown().await;
+    }
+
+    #[geario::test]
+    async fn test_middleware() {
+        assert_eq!(InFlight::default().max_inflight, 15);
+        assert_eq!(
+            format!("{:?}", InFlight::new(1)),
+            "InFlight { max_inflight: 1 }"
+        );
+
+        let (tx, rx) = mpmc::unbounded();
+        let rx = RefCell::new(Some(rx));
+        let sf = apply(
+            InFlight::new(1),
+            fn_factory(move || {
+                let rx = rx.borrow_mut().take().unwrap();
+                async move { Ok::<_, ()>(SleepService(rx)) }
+            }),
+        );
+
+        let srv = sf.pipeline(&()).await.unwrap();
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        let srv2 = srv.bind();
+        crate::rt::spawn(async move {
+            let _ = srv2.call(()).await;
+        });
+        crate::util::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+
+        let _ = tx.send(()).await;
+        crate::util::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+    }
+
+    #[geario::test]
+    async fn test_middleware2() {
+        assert_eq!(InFlight::default().max_inflight, 15);
+        assert_eq!(
+            format!("{:?}", InFlight::new(1)),
+            "InFlight { max_inflight: 1 }"
+        );
+
+        let (tx, rx) = mpmc::unbounded();
+        let rx = RefCell::new(Some(rx));
+        let sf = apply(
+            InFlight::new(1),
+            fn_factory(move || {
+                let rx = rx.borrow_mut().take().unwrap();
+                async move { Ok::<_, ()>(SleepService(rx)) }
+            }),
+        );
+
+        let srv = sf.pipeline(&()).await.unwrap();
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        let srv2 = srv.bind();
+        crate::rt::spawn(async move {
+            let _ = srv2.call(()).await;
+        });
+        crate::util::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+
+        let _ = tx.send(()).await;
+        crate::util::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+    }
+}
