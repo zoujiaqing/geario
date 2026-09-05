@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["geario", "geario-macros", "geario-http"]
+members = ["geario", "geario-macros", "geario-http", "geario-ffi"]
 exclude = ["bench-echo"]
 
 [workspace.package]
@@ -22,6 +22,7 @@ unexpected_cfgs = { level = "warn", priority = -2, check-cfg = ['cfg(docsrs_dep)
 geario = { path = "geario" }
 geario-macros = { path = "geario-macros" }
 geario-http = { path = "geario-http" }
+geario-ffi = { path = "geario-ffi" }
 
 ntex-polling = "3.10.0"
 ntex-io-uring = "0.7.120"
