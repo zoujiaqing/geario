@@ -1,0 +1,27 @@
+[package]
+name = "geario"
+version = "0.1.0"
+description = "Async IO stack for the Neton ecosystem, ported from ntex"
+keywords = ["network", "async", "io", "io-uring"]
+categories = ["network-programming", "asynchronous"]
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[lib]
+name = "geario"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+trace = []
+
+[dependencies]
+
+[dev-dependencies]

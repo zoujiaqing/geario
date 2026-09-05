@@ -1,0 +1,26 @@
+geario
+
+This product includes software derived from ntex.
+
+  ntex — https://github.com/ntex-rs/ntex
+  Copyright (c) ntex contributors <team@ntex.rs>
+  Licensed under MIT OR Apache-2.0
+
+Derived at upstream commit 48eef5bd (ntex 4.0.0-beta.2).
+
+The following geario modules are ports of ntex crates, with directory
+layout and crate paths adapted to geario. Code logic is unchanged:
+
+  src/bytes/       from ntex-bytes
+  src/codec/       from ntex-codec
+  src/error/       from ntex-error
+  src/util/        from ntex-util
+  src/service/     from ntex-service
+  src/rt/          from ntex-rt
+  src/io/          from ntex-io
+  src/dispatcher/  from ntex-dispatcher
+  src/net/         from ntex-net
+  src/server/      from ntex-server
+
+geario-macros is a port of ntex-macros, limited to the runtime
+attribute macros; the web routing macros were not ported.
