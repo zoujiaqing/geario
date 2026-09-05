@@ -23,5 +23,6 @@ default = []
 trace = []
 
 [dependencies]
+geario-macros = { workspace = true }
 
 [dev-dependencies]

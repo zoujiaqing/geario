@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["geario"]
+members = ["geario", "geario-macros"]
 
 [workspace.package]
 authors = ["zoujiaqing <zoujiaqing@gmail.com>"]

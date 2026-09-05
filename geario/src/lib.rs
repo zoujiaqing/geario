@@ -10,3 +10,5 @@
 // use, so it has to be silenced here.
 #[allow(unused_extern_crates)]
 extern crate self as geario;
+
+pub use geario_macros::{rt_main as main, rt_test as test};
