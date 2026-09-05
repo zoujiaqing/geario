@@ -22,17 +22,18 @@ workspace = true
 default = []
 trace = []
 simd = ["simdutf8"]
-overuse = ["backtrace"]
+overuse = []
 
 [dependencies]
 geario-macros = { workspace = true }
 bytes = { workspace = true }
 foldhash = { workspace = true }
+thiserror = { workspace = true }
 log = { workspace = true }
 slab = { workspace = true }
 serde = { workspace = true }
 simdutf8 = { workspace = true, optional = true }
-backtrace = { workspace = true, optional = true }
+backtrace = { workspace = true }
 
 [dev-dependencies]
 rand = { workspace = true }
