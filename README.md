@@ -6,17 +6,23 @@ geario is the network layer extracted from the [ntex](https://github.com/ntex-rs
 framework and reorganized into a single crate. It gives you buffers, an event
 loop, sockets and a connection dispatcher without pulling in a web framework.
 
-The HTTP protocol layer lives in a separate crate, `geario-http`, which
-currently speaks HTTP/1.1.
+The HTTP protocol layer lives in its own repository,
+[geario-http](https://github.com/zoujiaqing/geario-http).
 
 ## Status
 
 Early. The API is not stable yet.
 
-| Crate | What works |
+## Crates
+
+| Crate | What it is |
 | --- | --- |
-| `geario` | Buffers, runtime, sockets, dispatcher, server |
-| `geario-http` | HTTP/1.1 server. HTTP/2 is not implemented yet |
+| `geario` | Everything: buffers, runtime, sockets, dispatcher, server |
+| `geario-macros` | `#[geario::main]` and `#[geario::test]` |
+
+`geario-macros` is a separate crate only because Rust requires it: a
+`proc-macro` crate cannot export anything but macros. You never name it in
+your own `Cargo.toml` — `geario` re-exports both attributes.
 
 ## Modules
 

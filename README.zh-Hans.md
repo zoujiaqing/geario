@@ -6,16 +6,22 @@ geario 是从 [ntex](https://github.com/ntex-rs/ntex) 框架中提取出来的�
 重新整理成了单个 crate。它提供缓冲区、事件循环、套接字和连接调度器，
 不附带任何 Web 框架。
 
-HTTP 协议层在独立的 `geario-http` 中，目前支持 HTTP/1.1。
+HTTP 协议层在独立仓库 [geario-http](https://github.com/zoujiaqing/geario-http)。
 
 ## 状态
 
 早期阶段，API 尚未稳定。
 
-| Crate | 可用能力 |
+## Crates
+
+| Crate | 内容 |
 | --- | --- |
-| `geario` | 缓冲区、运行时、套接字、dispatcher、server |
-| `geario-http` | HTTP/1.1 服务端。HTTP/2 尚未实现 |
+| `geario` | 全部：缓冲区、运行时、套接字、dispatcher、server |
+| `geario-macros` | `#[geario::main]` 与 `#[geario::test]` |
+
+`geario-macros` 单独成 crate 纯粹是 Rust 的硬性要求：`proc-macro` crate
+除了宏之外不能导出任何东西。你不需要在自己的 `Cargo.toml` 里写它——
+`geario` 已经把两个属性再导出了。
 
 ## 模块
 
