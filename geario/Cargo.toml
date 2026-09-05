@@ -21,6 +21,8 @@ workspace = true
 [features]
 default = []
 trace = []
+tokio = ["tok-io"]
+compio = ["compio-driver", "compio-runtime"]
 simd = ["simdutf8"]
 overuse = []
 
@@ -29,11 +31,32 @@ geario-macros = { workspace = true }
 bytes = { workspace = true }
 foldhash = { workspace = true }
 thiserror = { workspace = true }
+atomic-waker = { workspace = true }
+async-channel = { workspace = true }
+async-task = { workspace = true }
+crossbeam-queue = { workspace = true }
+crossbeam-channel = { workspace = true }
+futures-timer = { workspace = true }
+libc = { workspace = true }
+nix = { workspace = true, features = ["signal"] }
+oneshot = { workspace = true }
+parking_lot = { workspace = true }
+scoped-tls = { workspace = true }
+swap-buffer-queue = { workspace = true }
+compio-driver = { workspace = true, optional = true }
+compio-runtime = { workspace = true, optional = true }
+tok-io = { workspace = true, features = ["rt", "net"], optional = true }
 log = { workspace = true }
 slab = { workspace = true }
 serde = { workspace = true }
 simdutf8 = { workspace = true, optional = true }
 backtrace = { workspace = true }
+
+[target.'cfg(target_family = "unix")'.dependencies]
+signal-hook = { workspace = true }
+
+[target.'cfg(target_family = "windows")'.dependencies]
+ctrlc = { workspace = true }
 
 [dev-dependencies]
 rand = { workspace = true }
