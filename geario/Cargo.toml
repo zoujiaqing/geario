@@ -22,8 +22,11 @@ workspace = true
 default = []
 trace = []
 no-test-logging = []
+neon-polling = []
+neon-uring = []
+neon-iocp = []
 tokio = ["tok-io"]
-compio = ["compio-driver", "compio-runtime"]
+compio = ["compio-net", "compio-driver", "compio-runtime", "compio-buf", "compio-io"]
 simd = ["simdutf8"]
 overuse = []
 
@@ -33,6 +36,13 @@ bytes = { workspace = true }
 foldhash = { workspace = true }
 thiserror = { workspace = true }
 bitflags = { workspace = true }
+cfg-if = { workspace = true }
+http = { workspace = true }
+ntex-polling = { workspace = true }
+socket2 = { workspace = true, features = ["all"] }
+compio-buf = { workspace = true, optional = true }
+compio-io = { workspace = true, optional = true }
+compio-net = { workspace = true, optional = true }
 env_logger = { workspace = true }
 futures-core = { workspace = true }
 hashbrown = { workspace = true, features = ["serde"] }
@@ -57,6 +67,19 @@ slab = { workspace = true }
 serde = { workspace = true }
 simdutf8 = { workspace = true, optional = true }
 backtrace = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ntex-io-uring = { workspace = true, features = ["direct-syscall"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_WindowsProgramming",
+] }
 
 [target.'cfg(target_family = "unix")'.dependencies]
 signal-hook = { workspace = true }

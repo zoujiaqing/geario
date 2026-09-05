@@ -15,6 +15,7 @@ pub mod codec;
 pub mod dispatcher;
 pub mod error;
 pub mod io;
+pub mod net;
 pub mod rt;
 pub mod service;
 pub mod util;

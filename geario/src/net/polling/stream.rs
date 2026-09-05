@@ -1,0 +1,524 @@
+#![allow(clippy::cast_possible_wrap)]
+use std::{cell::Cell, cmp, io, mem, os, os::fd::AsRawFd, rc::Rc, task::Poll};
+
+use crate::bytes::{BufMut, BytePage};
+use crate::io::{IoContext, IoTaskStatus};
+use crate::rt::Arbiter;
+use crate::syscall;
+use slab::Slab;
+use socket2::Socket;
+
+use super::{Event, Handler, Reactor, ReactorApi};
+use crate::net::helpers::Queue;
+
+const MAX_WRITE_SIZE: usize = 64 * 1024;
+const MAX_WRITE_ITEMS: usize = 16;
+
+pub(super) struct StreamCtl {
+    id: u32,
+    inner: Rc<StreamOpsInner>,
+}
+
+pub(super) struct WeakStreamCtl {
+    id: u32,
+    inner: Rc<StreamOpsInner>,
+}
+
+bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug)]
+    struct Flags: u8 {
+        const RD          = 0b0000_0001;
+        const WR          = 0b0000_0010;
+        const DROPPED_PRI = 0b0001_0000;
+        const DROPPED_SEC = 0b0010_0000;
+    }
+}
+
+enum IdType {
+    Stream(u32),
+    Weak(u32),
+    Write(u32),
+}
+
+#[derive(Debug)]
+pub(super) struct StreamItem {
+    io: Socket,
+    flags: Flags,
+    ctx: IoContext,
+}
+
+pub(crate) struct StreamOps(Rc<StreamOpsInner>);
+
+struct StreamOpsHandler {
+    inner: Rc<StreamOpsInner>,
+}
+
+struct StreamOpsInner {
+    api: ReactorApi,
+    delayed_feed: Queue<IdType>,
+    streams: Cell<Option<Box<Slab<StreamItem>>>>,
+}
+
+impl StreamOps {
+    /// Get `StreamOps` instance from the current runtime, or create new one
+    pub(crate) fn get(driver: &Reactor) -> Self {
+        Arbiter::get_value(|| {
+            let mut inner = None;
+            driver.register(|api| {
+                let ops = Rc::new(StreamOpsInner {
+                    api,
+                    delayed_feed: Queue::new(),
+                    streams: Cell::new(Some(Box::new(Slab::new()))),
+                });
+                inner = Some(ops.clone());
+                Box::new(StreamOpsHandler { inner: ops })
+            });
+
+            StreamOps(inner.unwrap())
+        })
+    }
+
+    /// Register new stream
+    pub(crate) fn register(&self, io: Socket, ctx: IoContext) -> (StreamCtl, WeakStreamCtl) {
+        let fd = io.as_raw_fd();
+        let stream = self.0.with(move |streams| {
+            let item = StreamItem {
+                io,
+                ctx,
+                flags: Flags::empty(),
+            };
+            StreamCtl {
+                id: streams.insert(item) as u32,
+                inner: self.0.clone(),
+            }
+        });
+
+        self.0
+            .api
+            .attach(fd, stream.id, Event::new(0, false, false));
+
+        let weak = WeakStreamCtl {
+            id: stream.id,
+            inner: self.0.clone(),
+        };
+
+        (stream, weak)
+    }
+}
+
+impl Clone for StreamOps {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl Handler for StreamOpsHandler {
+    fn event(&mut self, id: usize, ev: Event) {
+        self.inner.with(|streams| {
+            if !streams.contains(id) {
+                return;
+            }
+            let io = &mut streams[id];
+            let mut renew = Event::new(0, false, false).with_interrupt();
+            #[cfg(feature = "trace")]
+            log::trace!(
+                "{}: {:?}-Evt rd({:?}) wr({:?}) {:?}",
+                io.tag(),
+                io.fd(),
+                ev.readable,
+                ev.writable,
+                io.flags
+            );
+
+            if ev.readable {
+                if io.read() == IoTaskStatus::Io {
+                    renew.readable = true;
+                    io.flags.insert(Flags::RD);
+                } else {
+                    io.flags.remove(Flags::RD);
+                }
+            } else if io.flags.contains(Flags::RD) {
+                renew.readable = true;
+            }
+
+            if ev.writable {
+                if io.write() == IoTaskStatus::Io {
+                    renew.writable = true;
+                    io.flags.insert(Flags::WR);
+                } else {
+                    io.flags.remove(Flags::WR);
+                }
+            } else if io.flags.contains(Flags::WR) {
+                renew.writable = true;
+            }
+
+            if ev.is_interrupt() {
+                io.ctx.stop(None);
+            } else {
+                #[cfg(feature = "trace")]
+                log::trace!(
+                    "{}: {:?}-Renew rd({:?}) wr({:?})",
+                    io.tag(),
+                    io.fd(),
+                    renew.readable,
+                    renew.writable
+                );
+                self.inner.api.modify(io.fd(), id as u32, renew);
+            }
+        });
+    }
+
+    fn error(&mut self, id: usize, err: io::Error) {
+        self.inner.with(|streams| {
+            if let Some(io) = streams.get_mut(id) {
+                log::trace!("{}: {:?}-Failed err({err:?})", io.tag(), io.fd());
+                if !io.ctx.is_stopped() {
+                    io.ctx.stop(Some(err));
+                }
+            }
+        });
+    }
+
+    fn tick(&mut self) {
+        self.inner.check_delayed_feed();
+    }
+
+    fn cleanup(&mut self) {
+        if let Some(v) = self.inner.streams.take() {
+            for (_, val) in v.into_iter() {
+                if val.flags.contains(Flags::DROPPED_PRI) {
+                    mem::forget(val.io);
+                } else {
+                    log::trace!(
+                        "{}: Unclosed sockets {:?}",
+                        val.ctx.tag(),
+                        val.io.peer_addr()
+                    );
+                }
+            }
+        }
+        self.inner.delayed_feed.clear();
+    }
+}
+
+impl StreamOpsInner {
+    fn with<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut Slab<StreamItem>) -> R,
+    {
+        let mut streams = self.streams.take().unwrap();
+        let result = f(&mut streams);
+        self.streams.set(Some(streams));
+        result
+    }
+
+    /// Initiate write operation for the stream
+    fn write_stream(&self, id: u32) {
+        if let Some(mut streams) = self.streams.take() {
+            if let Some(item) = streams.get_mut(id as usize) {
+                item.write();
+            }
+            self.streams.set(Some(streams));
+        } else {
+            // Write is initiated while `StreamOps` is handling an event
+            // (e.g. a filter generated data during read processing).
+            // Delay the write until the streams slab is released,
+            // dropping it would stall the connection.
+            self.delayed_feed.push(IdType::Write(id));
+        }
+    }
+
+    fn drop_stream(&self, id: u32, streams: &mut Slab<StreamItem>) {
+        // Dropping while `StreamOps` handling event
+        let idx = id as usize;
+        let item = &mut streams[idx];
+        let fd = item.fd();
+        log::trace!("{}: {fd:?}-Close flags: {:?}", item.tag(), item.flags);
+
+        if !item.ctx.is_stopped() {
+            item.ctx.stop(None);
+        }
+        self.api.detach(fd, id);
+
+        if item.flags.contains(Flags::DROPPED_SEC) {
+            let item = streams.remove(idx);
+            crate::rt::spawn_blocking(move || {
+                if let Err(err) = syscall!(libc::close(fd)) {
+                    log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
+                }
+            })
+            .detach();
+            mem::forget(item.io);
+        } else {
+            item.flags.insert(Flags::DROPPED_PRI);
+        }
+    }
+
+    fn drop_weak_stream(id: u32, streams: &mut Slab<StreamItem>) {
+        // Dropping while `StreamOps` handling event
+        let idx = id as usize;
+        let item = &mut streams[idx];
+
+        if item.flags.contains(Flags::DROPPED_PRI) {
+            let item = streams.remove(idx);
+            let fd = item.fd();
+            crate::rt::spawn_blocking(move || {
+                if let Err(err) = syscall!(libc::close(fd)) {
+                    log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
+                }
+            })
+            .detach();
+            mem::forget(item.io);
+        } else {
+            item.flags.insert(Flags::DROPPED_SEC);
+        }
+    }
+
+    fn check_delayed_feed(&self) {
+        if !self.delayed_feed.is_empty()
+            && let Some(mut streams) = self.streams.take()
+        {
+            while let Some(id) = self.delayed_feed.pop() {
+                match id {
+                    IdType::Stream(id) => self.drop_stream(id, &mut streams),
+                    IdType::Weak(id) => StreamOpsInner::drop_weak_stream(id, &mut streams),
+                    IdType::Write(id) => {
+                        if let Some(item) = streams.get_mut(id as usize)
+                            && !item.ctx.is_stopped()
+                        {
+                            item.write();
+                        }
+                    }
+                }
+            }
+            self.streams.set(Some(streams));
+        }
+    }
+
+    /// Modify poll interest for the stream
+    fn interest(&self, id: u32, rd: bool, wr: bool) {
+        self.with(|streams| {
+            let io = &mut streams[id as usize];
+            let mut event = Event::new(0, false, false).with_interrupt();
+            #[cfg(feature = "trace")]
+            log::trace!(
+                "{}: {:?}-Mod rd({rd:?}) wr({wr:?}) {:?}",
+                io.tag(),
+                io.fd(),
+                io.flags
+            );
+
+            let mut want_update_read = true;
+            if rd {
+                if io.flags.contains(Flags::RD) {
+                    event.readable = true;
+                    want_update_read = false;
+                } else if io.read() == IoTaskStatus::Io {
+                    event.readable = true;
+                    io.flags.insert(Flags::RD);
+                } else {
+                    want_update_read = false;
+                }
+            } else if io.flags.contains(Flags::RD) {
+                io.flags.remove(Flags::RD);
+            } else {
+                want_update_read = false;
+            }
+
+            let mut want_update_write = true;
+            if wr {
+                if io.flags.contains(Flags::WR) {
+                    event.writable = true;
+                    want_update_write = false;
+                } else if io.write() == IoTaskStatus::Io {
+                    event.writable = true;
+                    io.flags.insert(Flags::WR);
+                } else {
+                    want_update_write = false;
+                }
+            } else if io.flags.contains(Flags::WR) {
+                io.flags.remove(Flags::WR);
+            } else {
+                want_update_write = false;
+            }
+
+            if want_update_read || want_update_write {
+                #[cfg(feature = "trace")]
+                log::trace!(
+                    "{}: {:?}-Upd rd({:?}) wr({:?})",
+                    io.tag(),
+                    io.fd(),
+                    event.readable,
+                    event.writable
+                );
+                self.api.modify(io.fd(), id, event);
+            }
+        });
+    }
+}
+
+impl StreamCtl {
+    pub(crate) async fn shutdown(self) -> io::Result<()> {
+        self.inner
+            .with(|streams| {
+                let item = &mut streams[self.id as usize];
+                let fd = item.fd();
+                crate::rt::spawn(crate::rt::spawn_blocking(move || {
+                    syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ())
+                }))
+            })
+            .await
+            .map_err(io::Error::other)
+            .and_then(|res| res.map_err(io::Error::other))
+            .and_then(|res| res)
+    }
+
+    /// Modify poll interest for the stream
+    pub(crate) fn interest(&self, rd: bool, wr: bool) {
+        self.inner.interest(self.id, rd, wr);
+    }
+}
+
+impl Drop for StreamCtl {
+    fn drop(&mut self) {
+        if let Some(mut streams) = self.inner.streams.take() {
+            self.inner.drop_stream(self.id, &mut streams);
+            self.inner.streams.set(Some(streams));
+        } else {
+            self.inner.delayed_feed.push(IdType::Stream(self.id));
+        }
+    }
+}
+
+impl WeakStreamCtl {
+    pub(super) fn with_socket<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&Socket) -> R,
+    {
+        self.inner.with(|streams| f(&streams[self.id as usize].io))
+    }
+
+    /// Initiate write operation for the stream
+    pub(super) fn write(&self) {
+        self.inner.write_stream(self.id);
+    }
+}
+
+impl Drop for WeakStreamCtl {
+    fn drop(&mut self) {
+        if let Some(mut streams) = self.inner.streams.take() {
+            StreamOpsInner::drop_weak_stream(self.id, &mut streams);
+            self.inner.streams.set(Some(streams));
+        } else {
+            self.inner.delayed_feed.push(IdType::Weak(self.id));
+        }
+    }
+}
+
+impl StreamItem {
+    fn fd(&self) -> os::fd::RawFd {
+        self.io.as_raw_fd()
+    }
+
+    fn tag(&self) -> &'static str {
+        self.ctx.tag()
+    }
+
+    fn write(&mut self) -> IoTaskStatus {
+        let res = self.ctx.with_write_buf(|wrt| {
+            let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
+                None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+                None, None,
+            ];
+            let mut bufs: [mem::MaybeUninit<io::IoSlice<'_>>; MAX_WRITE_ITEMS] =
+                [mem::MaybeUninit::uninit(); MAX_WRITE_ITEMS];
+
+            let mut num = 0;
+            let mut size = 0;
+            while let Some(page) = wrt.take() {
+                size += page.len();
+
+                // SAFETY: Page is stored in `pages` for lifetime of `bufs`
+                bufs[num] = mem::MaybeUninit::new(io::IoSlice::new(unsafe {
+                    mem::transmute::<&[u8], &[u8]>(page.as_ref())
+                }));
+                pages[num] = Some(page);
+
+                num += 1;
+                if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
+                    break;
+                }
+            }
+
+            if num > 0 {
+                let fd = self.fd();
+                let res = if num == 1 {
+                    let io = unsafe { bufs[0].assume_init_ref().as_ptr() };
+                    syscall!(break libc::write(fd, io.cast(), size))
+                } else {
+                    syscall!(break libc::writev(fd, bufs.as_ptr().cast(), num as i32))
+                }?;
+                #[cfg(feature = "trace")]
+                log::trace!("{}: {fd:?}-Wrt buf({num}:{size}) ({res:?})", self.ctx.tag());
+
+                // remove written bytes
+                if let Poll::Ready(mut written) = res {
+                    for page in pages[..num].iter_mut().flatten() {
+                        let len = cmp::min(page.len(), written);
+                        page.advance_to(len);
+                        written -= len;
+                        if written == 0 {
+                            break;
+                        }
+                    }
+                }
+                // return unwritten data back to buffer
+                for p in pages[..num].iter_mut().rev() {
+                    if let Some(page) = p.take() {
+                        wrt.prepend(page);
+                    }
+                }
+
+                match res {
+                    Poll::Ready(n) => {
+                        if n == 0 {
+                            self.ctx.stop(None);
+                        }
+                        Ok(n > 0)
+                    }
+                    Poll::Pending => Ok(false),
+                }
+            } else {
+                Ok(false)
+            }
+        });
+        self.ctx.update_write_status(res)
+    }
+
+    fn read(&mut self) -> IoTaskStatus {
+        let fd = self.fd();
+        let mut buf = self.ctx.get_read_buf();
+
+        let chunk = buf.chunk_mut();
+        let chunk_len = chunk.len();
+        let chunk_ptr = chunk.as_mut_ptr();
+
+        let result = syscall!(break libc::read(fd, chunk_ptr.cast(), chunk_len));
+        #[cfg(feature = "trace")]
+        log::trace!("{}: {fd:?}-Rdt sz() = {result:?}", self.tag());
+
+        let st = match result {
+            Poll::Ready(Ok(0)) => {
+                self.ctx.stop(None);
+                Ok(0)
+            }
+            Poll::Ready(Ok(n)) => {
+                unsafe { buf.advance_mut(n) };
+                Ok(n)
+            }
+            Poll::Ready(Err(err)) => Err(err),
+            Poll::Pending => Ok(0),
+        };
+        self.ctx.update_read_status(buf, st)
+    }
+}

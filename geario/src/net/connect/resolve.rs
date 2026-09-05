@@ -1,0 +1,97 @@
+use std::{io, net};
+
+use crate::error::Error;
+use crate::rt::spawn_blocking;
+use crate::util::future::Either;
+
+use super::{Address, Connect, ConnectError};
+
+/// Lookup ip addresses for provided host
+pub(crate) async fn lookup<T: Address>(
+    mut req: Connect<T>,
+    tag: &str,
+) -> Result<Connect<T>, Error<ConnectError>> {
+    if req.addr.is_some() || req.req.addr().is_some() {
+        Ok(req)
+    } else if let Ok(ip) = req.host().parse() {
+        req.addr = Some(Either::Left(net::SocketAddr::new(ip, req.port())));
+        Ok(req)
+    } else {
+        log::trace!("{tag}: DNS Resolver - resolving host {:?}", req.host());
+
+        let host = if req.host().contains(':') {
+            req.host().to_string()
+        } else {
+            format!("{}:{}", req.host(), req.port())
+        };
+
+        let fut = spawn_blocking(move || net::ToSocketAddrs::to_socket_addrs(&host));
+        match fut.await {
+            Ok(Ok(ips)) => {
+                let port = req.port();
+                req = req.set_addrs(ips.rev().map(|mut ip| {
+                    ip.set_port(port);
+                    ip
+                }));
+
+                log::trace!(
+                    "{}: DNS Resolver - host {:?} resolved to {:?}",
+                    tag,
+                    req.host(),
+                    req.addrs()
+                );
+
+                if req.addr.is_none() {
+                    Err(ConnectError::NoRecords.into())
+                } else {
+                    Ok(req)
+                }
+            }
+            Ok(Err(e)) => {
+                log::trace!(
+                    "{}: DNS Resolver - failed to resolve host {:?} err: {}",
+                    tag,
+                    req.host(),
+                    e
+                );
+                Err(ConnectError::Resolver(e).into())
+            }
+            Err(e) => {
+                log::trace!(
+                    "{}: DNS Resolver - failed to resolve host {:?} err: {}",
+                    tag,
+                    req.host(),
+                    e
+                );
+                Err(ConnectError::Resolver(io::Error::other(e)).into())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Needs working DNS that answers NXDOMAIN for unknown names. Fake-IP
+    // proxies resolve every name to 198.18.0.0/15, which makes the negative
+    // lookup below succeed. Run with `cargo test -- --ignored`.
+    #[ignore]
+    #[allow(clippy::clone_on_copy)]
+    #[geario::test]
+    async fn resolver() {
+        let res = lookup(Connect::new("www.rust-lang.org"), "").await;
+        assert!(res.is_ok());
+
+        let res = lookup(Connect::new("---11213"), "").await;
+        assert!(res.is_err());
+
+        let addr: net::SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let res = lookup(Connect::new("www.rust-lang.org").set_addrs(vec![addr]), "")
+            .await
+            .unwrap();
+        let addrs: Vec<_> = res.addrs().collect();
+        assert_eq!(addrs.len(), 1);
+        assert!(addrs.contains(&addr));
+    }
+}
