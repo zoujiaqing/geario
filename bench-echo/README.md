@@ -13,7 +13,14 @@ copies of Io, Codec and friends never enter geario's dependency tree.
 
 ## Running
 
-    cargo run --release --manifest-path server-geario/Cargo.toml
-    cargo run --release --manifest-path client/Cargo.toml -- 127.0.0.1:8080
+    cargo build --release
+    ./run.sh
 
-Then the same two commands with server-ntex, which binds 8081.
+`run.sh` alternates the two servers and prints one `geario ntex` pair per
+round. It tracks each server by pid and waits for it to exit; an earlier
+version used pkill between rounds and left processes alive often enough to
+contaminate the numbers.
+
+Nothing else should be building or running while it does. The measurement
+does not resolve small differences: see docs/benchmarks for what the spread
+looks like in practice.

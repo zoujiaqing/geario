@@ -24,6 +24,8 @@ ntex's, so the two paths are the same code modulo crate boundaries.
 | 3 | 116,219 | 116,731 | -0.4% |
 | **Median** | **116,296** | **119,102** | **-2.4%** |
 
+Taken with the old harness. See "Reading" below before using these.
+
 Latency, median round:
 
 | | geario | ntex |
@@ -33,18 +35,30 @@ Latency, median round:
 
 ## Reading
 
-The acceptance bar for the port was +/-3%, and -2.4% clears it. But the
-number is not noise-shaped: two of three rounds land on -2.4% exactly, so
-something small and real is more likely than measurement scatter.
+**Withdrawn.** The first version of this file read -2.4% as a real effect
+because two of three rounds landed on it exactly. Later rounds on the same
+harness produced -3.9%, +3.4%, -4.8%, then -11.8% and +5.6%: a spread wide
+enough to contain zero several times over, with the sign changing.
 
-Nothing in the port should cost throughput. Merging ten crates into one
-removes cross-crate call boundaries, which if anything should help. Worth
-a profile before the slimming phase starts, so the baseline is understood
-rather than assumed.
+Three samples were not enough to tell a repeated number from a coincidence,
+and reading a trend into them was the mistake.
 
-p50 is better on geario and p99 is worse, in every round. That shape
-usually means a scheduling or buffer-growth difference rather than a hot
-path difference.
+Part of the spread had a cause. `run.sh` used to separate rounds with
+`pkill`, which left a server alive often enough to matter; a stray holds its
+port and competes for CPU with the round that follows. That is fixed, but
+the numbers above were taken with the old harness and are not worth
+re-interpreting.
+
+## Where this leaves the question
+
+The port should not cost throughput. Merging ten crates into one removes
+cross-crate call boundaries, which if anything should help. Whether it does
+is still unmeasured: this harness, on this machine, does not resolve a
+difference of a few percent.
+
+Re-measuring needs a quiet machine, more rounds, and a look at the spread
+before any single number is quoted. Until then there is nothing here to
+profile, because there is nothing established to explain.
 
 ## Reproducing
 
