@@ -1,7 +1,4 @@
 //! Async IO stack for the Neton ecosystem.
-//!
-//! Ported from ntex (<https://github.com/ntex-rs/ntex>, MIT OR Apache-2.0)
-//! at commit 48eef5bd. See NOTICE for details.
 #![doc(html_root_url = "https://docs.rs/geario/")]
 #![allow(unreachable_pub)]
 
@@ -12,3 +9,5 @@
 extern crate self as geario;
 
 pub use geario_macros::{rt_main as main, rt_test as test};
+
+pub mod bytes;

@@ -1,8 +1,4 @@
 //! Runtime attribute macros for geario.
-//!
-//! Ported from ntex-macros (<https://github.com/ntex-rs/ntex>,
-//! MIT OR Apache-2.0) at commit 48eef5bd. The web routing macros were
-//! not ported; geario has no web layer.
 use proc_macro::TokenStream;
 use quote::quote;
 
@@ -70,10 +66,6 @@ pub fn rt_main(args: TokenStream, item: TokenStream) -> TokenStream {
 ///     assert!(true);
 /// }
 /// ```
-///
-/// Unlike ntex, geario needs only this one variant: `geario/src/lib.rs`
-/// declares `extern crate self as geario`, so the `geario::` paths below
-/// resolve both inside the geario crate and from dependent crates.
 #[proc_macro_attribute]
 pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(item as syn::ItemFn);
