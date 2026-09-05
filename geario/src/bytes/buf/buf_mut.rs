@@ -14,7 +14,7 @@ use super::{UninitSlice, Writer};
 /// The simplest `BufMut` is a `Vec<u8>`.
 ///
 /// ```
-/// use ntex_bytes::BufMut;
+/// use geario::bytes::BufMut;
 ///
 /// let mut buf = vec![];
 ///
@@ -32,7 +32,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut dst = [0; 10];
     /// let mut buf = &mut dst[..];
@@ -61,7 +61,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = Vec::with_capacity(16);
     ///
@@ -98,7 +98,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut dst = [0; 5];
     /// let mut buf = &mut dst[..];
@@ -126,7 +126,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = Vec::with_capacity(16);
     ///
@@ -159,7 +159,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     ///
@@ -201,7 +201,7 @@ pub trait BufMut {
     /// `self` must have enough remaining capacity to contain all of `src`.
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut dst = [0; 6];
     ///
@@ -244,7 +244,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_u8(0x01);
@@ -268,7 +268,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_i8(0x01);
@@ -290,7 +290,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_u16(0x0809);
@@ -313,7 +313,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_u16_le(0x0809);
@@ -336,7 +336,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_i16(0x0809);
@@ -359,7 +359,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_i16_le(0x0809);
@@ -382,7 +382,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_u32(0x0809A0A1);
@@ -405,7 +405,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_u32_le(0x0809A0A1);
@@ -428,7 +428,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_i32(0x0809A0A1);
@@ -451,7 +451,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_i32_le(0x0809A0A1);
@@ -474,7 +474,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_u64(0x0102030405060708);
@@ -497,7 +497,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_u64_le(0x0102030405060708);
@@ -520,7 +520,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_i64(0x0102030405060708);
@@ -543,7 +543,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_i64_le(0x0102030405060708);
@@ -566,7 +566,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_u128(0x01020304050607080910111213141516);
@@ -589,7 +589,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_u128_le(0x01020304050607080910111213141516);
@@ -612,7 +612,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_i128(0x01020304050607080910111213141516);
@@ -635,7 +635,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_i128_le(0x01020304050607080910111213141516);
@@ -658,7 +658,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_uint(0x010203, 3);
@@ -681,7 +681,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_uint_le(0x010203, 3);
@@ -704,7 +704,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_int(0x010203, 3);
@@ -727,7 +727,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_int_le(0x010203, 3);
@@ -751,7 +751,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_f32(1.2f32);
@@ -775,7 +775,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_f32_le(1.2f32);
@@ -799,7 +799,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_f64(1.2f64);
@@ -823,7 +823,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut buf = vec![];
     /// buf.put_f64_le(1.2f64);
@@ -850,7 +850,7 @@ pub trait BufMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     /// use std::io::Write;
     ///
     /// let mut buf = vec![].writer();

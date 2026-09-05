@@ -14,7 +14,7 @@ use crate::bytes::{Buf, BytesMut, buf::IntoIter, debug, storage::INLINE_CAP, sto
 /// be freed.
 ///
 /// ```
-/// use ntex_bytes::Bytes;
+/// use geario::bytes::Bytes;
 ///
 /// let mut mem = Bytes::from(&b"Hello world"[..]);
 /// let a = mem.slice(0..5);
@@ -112,7 +112,7 @@ impl Bytes {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::Bytes;
+    /// use geario::bytes::Bytes;
     ///
     /// let b = Bytes::new();
     /// assert_eq!(&b[..], b"");
@@ -132,7 +132,7 @@ impl Bytes {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::Bytes;
+    /// use geario::bytes::Bytes;
     ///
     /// let b = Bytes::from_static(b"hello");
     /// assert_eq!(&b[..], b"hello");
@@ -150,7 +150,7 @@ impl Bytes {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::Bytes;
+    /// use geario::bytes::Bytes;
     ///
     /// let b = Bytes::from(&b"hello"[..]);
     /// assert_eq!(b.len(), 5);
@@ -165,7 +165,7 @@ impl Bytes {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::Bytes;
+    /// use geario::bytes::Bytes;
     ///
     /// let b = Bytes::new();
     /// assert!(b.is_empty());
@@ -179,7 +179,7 @@ impl Bytes {
     ///
     /// # Examples
     /// ```
-    /// use ntex_bytes::{Bytes, BytesMut};
+    /// use geario::bytes::{Bytes, BytesMut};
     ///
     /// assert!(Bytes::from(BytesMut::from(&[0, 0, 0, 0][..])).is_inline());
     /// assert!(Bytes::from(Vec::with_capacity(4)).is_inline());
@@ -209,7 +209,7 @@ impl Bytes {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::Bytes;
+    /// use geario::bytes::Bytes;
     ///
     /// let a = Bytes::from(b"hello world");
     /// let b = a.slice(2..5);
@@ -280,7 +280,7 @@ impl Bytes {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::Bytes;
+    /// use geario::bytes::Bytes;
     ///
     /// let bytes = Bytes::from(&b"012345678"[..]);
     /// let as_slice = bytes.as_ref();
@@ -327,7 +327,7 @@ impl Bytes {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::Bytes;
+    /// use geario::bytes::Bytes;
     ///
     /// let mut a = Bytes::from(&b"hello world"[..]);
     /// let b = a.split_off(5);
@@ -376,7 +376,7 @@ impl Bytes {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::Bytes;
+    /// use geario::bytes::Bytes;
     ///
     /// let mut a = Bytes::from(&b"hello world"[..]);
     /// let b = a.split_to(5);
@@ -422,7 +422,7 @@ impl Bytes {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::Bytes;
+    /// use geario::bytes::Bytes;
     ///
     /// let mut a = Bytes::copy_from_slice(&b"hello world"[..]);
     /// a.advance_to(5);
@@ -452,7 +452,7 @@ impl Bytes {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::Bytes;
+    /// use geario::bytes::Bytes;
     ///
     /// let mut buf = Bytes::from(&b"hello world"[..]);
     /// buf.truncate(5);
@@ -472,7 +472,7 @@ impl Bytes {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::Bytes;
+    /// use geario::bytes::Bytes;
     ///
     /// let mut buf = Bytes::from(&b"hello world"[..]);
     /// buf.trimdown();
@@ -488,7 +488,7 @@ impl Bytes {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::Bytes;
+    /// use geario::bytes::Bytes;
     ///
     /// let mut buf = Bytes::from(&b"hello world"[..]);
     /// buf.clear();
@@ -504,7 +504,7 @@ impl Bytes {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::{Buf, Bytes};
+    /// use geario::bytes::{Buf, Bytes};
     ///
     /// let buf = Bytes::from(&b"abc"[..]);
     /// let mut iter = buf.iter();

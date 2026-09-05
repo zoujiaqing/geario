@@ -31,7 +31,7 @@ impl UninitSlice {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::buf::UninitSlice;
+    /// use geario::bytes::buf::UninitSlice;
     ///
     /// let bytes = b"hello world".to_vec();
     /// let ptr = bytes.as_ptr() as *mut _;
@@ -54,7 +54,7 @@ impl UninitSlice {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::buf::UninitSlice;
+    /// use geario::bytes::buf::UninitSlice;
     ///
     /// let mut data = [b'f', b'o', b'o'];
     /// let slice = unsafe { UninitSlice::from_raw_parts_mut(data.as_mut_ptr(), 3) };
@@ -81,7 +81,7 @@ impl UninitSlice {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::buf::UninitSlice;
+    /// use geario::bytes::buf::UninitSlice;
     ///
     /// let mut data = [b'f', b'o', b'o'];
     /// let slice = unsafe { UninitSlice::from_raw_parts_mut(data.as_mut_ptr(), 3) };
@@ -111,7 +111,7 @@ impl UninitSlice {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut data = [0, 1, 2];
     /// let mut slice = &mut data[..];
@@ -127,7 +127,7 @@ impl UninitSlice {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BufMut;
+    /// use geario::bytes::BufMut;
     ///
     /// let mut data = [0, 1, 2];
     /// let mut slice = &mut data[..];

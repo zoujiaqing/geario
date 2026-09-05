@@ -37,6 +37,8 @@ foldhash = { workspace = true }
 thiserror = { workspace = true }
 bitflags = { workspace = true }
 cfg-if = { workspace = true }
+core_affinity = { workspace = true }
+uuid = { workspace = true }
 http = { workspace = true }
 ntex-polling = { workspace = true }
 socket2 = { workspace = true, features = ["all"] }

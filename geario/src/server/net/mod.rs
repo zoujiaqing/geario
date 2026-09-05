@@ -1,0 +1,80 @@
+//! General purpose tcp server
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use crate::util::services::Counter;
+
+mod accept;
+mod builder;
+mod config;
+mod factory;
+mod service;
+mod socket;
+mod state;
+mod test;
+
+pub use self::accept::{AcceptLoop, AcceptNotify, AcceptorCommand};
+pub use self::builder::{ServerBuilder, bind_addr, create_tcp_listener};
+pub use self::config::{ServiceConfig, ServiceRuntime};
+pub use self::service::StreamServer;
+pub use self::socket::{Connection, Stream};
+pub use self::state::{NoConfig, ServerAppConfig};
+pub use self::test::{TestServer, TestServerBuilder, build_test_server, test_server};
+
+pub type Server = crate::server::Server<Connection>;
+
+#[non_exhaustive]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+/// Server readiness status
+pub enum ServerStatus {
+    Ready,
+    NotReady,
+    WorkerFailed,
+}
+
+/// Socket id token
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Token(usize);
+
+impl Token {
+    #[must_use]
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> Token {
+        let token = Token(self.0);
+        self.0 += 1;
+        token
+    }
+}
+
+/// Start server building process
+pub fn build() -> ServerBuilder {
+    ServerBuilder::default()
+}
+
+/// Start server with state building process
+pub fn build_with_cfg<Cfg>(state: Cfg) -> ServerBuilder<Cfg>
+where
+    Cfg: ServerAppConfig,
+{
+    ServerBuilder::new(state)
+}
+
+static MAX_CONNS: AtomicUsize = AtomicUsize::new(25600);
+
+thread_local! {
+    static MAX_CONNS_COUNTER: Counter = Counter::new(MAX_CONNS.load(Ordering::Relaxed));
+}
+
+/// Sets the maximum per-worker number of concurrent connections.
+///
+/// All socket listeners will stop accepting connections when this limit is
+/// reached for each worker.
+///
+/// By default max connections is set to a 25k per worker.
+pub(crate) fn max_concurrent_connections(num: usize) {
+    MAX_CONNS.store(num, Ordering::Relaxed);
+    MAX_CONNS_COUNTER.with(|conns| conns.set_capacity(num));
+}
+
+pub(crate) fn num_connections() -> usize {
+    MAX_CONNS_COUNTER.with(Counter::total)
+}

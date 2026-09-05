@@ -1,0 +1,420 @@
+use std::{fmt, io, net, sync::Arc};
+
+use crate::io::Io;
+use crate::rt::System;
+use crate::service::{IntoService, Service, cfg::SharedCfg};
+use crate::util::time::Millis;
+use socket2::{Domain, SockAddr, Socket, Type};
+
+use crate::server::{Server, WorkerPool};
+
+use super::accept::AcceptLoop;
+use super::config::ServiceConfig;
+use super::factory::{self, FactoryServiceType};
+use super::state::{NoConfig, ServerAppConfig};
+use super::{Connection, ServerStatus, StreamServer, Token, socket::Listener};
+
+/// Streaming service builder
+///
+/// This type can be used to construct an instance of `net streaming server` through a
+/// builder-like pattern.
+pub struct ServerBuilder<Cfg = NoConfig> {
+    name: String,
+    token: Token,
+    backlog: i32,
+    state: Arc<Cfg>,
+    services: Vec<FactoryServiceType<Cfg>>,
+    sockets: Vec<(Token, String, Listener)>,
+    accept: AcceptLoop,
+    pool: WorkerPool,
+}
+
+impl Default for ServerBuilder {
+    fn default() -> Self {
+        Self::new(NoConfig)
+    }
+}
+
+impl<Cfg> ServerBuilder<Cfg>
+where
+    Cfg: ServerAppConfig,
+{
+    #[must_use]
+    /// Create new Server builder instance.
+    ///
+    /// Provided function get called during worker runtime configuration stage
+    /// and must construct server state.
+    pub fn new(cfg: Cfg) -> ServerBuilder<Cfg> {
+        let sys = System::current();
+        let mut accept = AcceptLoop::default();
+        accept.name(sys.name());
+        if sys.testing() {
+            accept.testing();
+        }
+
+        ServerBuilder {
+            accept,
+            name: sys.name().to_string(),
+            token: Token(0),
+            state: Arc::new(cfg),
+            services: Vec::new(),
+            sockets: Vec::new(),
+            backlog: 2048,
+            pool: WorkerPool::default().name(sys.name()),
+        }
+    }
+
+    #[must_use]
+    /// Set server name.
+    ///
+    /// Name is used for worker thread name
+    pub fn name<T: AsRef<str>>(mut self, name: T) -> Self {
+        self.name = name.as_ref().to_string();
+        self.accept.name(self.name.as_str());
+        self.pool = self.pool.name(self.name.as_str());
+        self
+    }
+
+    #[must_use]
+    /// Set number of workers to start.
+    ///
+    /// By default server uses number of available logical cpu as workers
+    /// count.
+    pub fn workers(mut self, num: usize) -> Self {
+        self.pool = self.pool.workers(num);
+        self
+    }
+
+    #[must_use]
+    /// Set the maximum number of pending connections.
+    ///
+    /// This refers to the number of clients that can be waiting to be served.
+    /// Exceeding this number results in the client getting an error when
+    /// attempting to connect. It should only affect servers under significant
+    /// load.
+    ///
+    /// Generally set in the 64-2048 range. Default value is 2048.
+    ///
+    /// This method should be called before `bind()` method call.
+    pub fn backlog(mut self, num: i32) -> Self {
+        self.backlog = num;
+        self
+    }
+
+    #[must_use]
+    /// Sets the maximum per-worker number of concurrent connections.
+    ///
+    /// All socket listeners will stop accepting connections when this limit is
+    /// reached for each worker.
+    ///
+    /// By default max connections is set to a 25k per worker.
+    pub fn maxconn(self, num: usize) -> Self {
+        super::max_concurrent_connections(num);
+        self
+    }
+
+    #[must_use]
+    /// Stop geario runtime when server get dropped.
+    ///
+    /// By default "stop runtime" is disabled.
+    pub fn stop_runtime(mut self) -> Self {
+        self.pool = self.pool.stop_runtime();
+        self
+    }
+
+    #[must_use]
+    /// Stops the server when one of the workers panics.
+    ///
+    /// By default, "stop on panic" is disabled.
+    pub fn stop_on_panic(mut self) -> Self {
+        self.pool = self.pool.stop_on_panic();
+        self
+    }
+
+    #[must_use]
+    /// Disable signal handling.
+    ///
+    /// By default, signal handling is enabled.
+    pub fn disable_signals(mut self) -> Self {
+        self.pool = self.pool.disable_signals();
+        self
+    }
+
+    #[must_use]
+    /// Enable cpu affinity.
+    ///
+    /// By default, affinity is disabled.
+    pub fn enable_affinity(mut self) -> Self {
+        self.pool = self.pool.enable_affinity();
+        self
+    }
+
+    #[must_use]
+    /// Graceful shutdown.
+    ///
+    /// Gracefully shuts down on SIGSEGV or SIGQUIT and app panics.
+    /// Graceful shutdown is always enabled for SIGTERM.
+    /// By default, it is disabled for SIGSEGV and SIGQUIT and panics.
+    pub fn graceful_shutdown(mut self) -> Self {
+        self.pool = self.pool.graceful_shutdown();
+        self
+    }
+
+    #[must_use]
+    /// Timeout for graceful worker shutdown.
+    ///
+    /// After receiving a stop signal, workers have this much time to finish
+    /// serving requests. Workers that are still alive after the timeout are
+    /// forcefully dropped.
+    ///
+    /// By default, the shutdown timeout is set to 30 seconds.
+    pub fn shutdown_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
+        self.pool = self.pool.shutdown_timeout(timeout);
+        self
+    }
+
+    #[must_use]
+    /// Sets the server status handler.
+    ///
+    /// The server calls this handler on every internal status update.
+    pub fn status_handler<F>(mut self, handler: F) -> Self
+    where
+        F: FnMut(ServerStatus) + Send + 'static,
+    {
+        self.accept.set_status_handler(handler);
+        self
+    }
+
+    /// Execute external async configuration as part of the server building
+    /// process.
+    ///
+    /// This function is useful for moving parts of configuration to a
+    /// different module or even library.
+    pub async fn configure<F>(mut self, f: F) -> io::Result<Self>
+    where
+        F: AsyncFn(ServiceConfig<Cfg>) -> io::Result<()>,
+    {
+        let cfg = ServiceConfig::new(self.token, self.backlog);
+
+        f(cfg.clone()).await?;
+
+        let (token, sockets, factory) = cfg.into_factory();
+        self.token = token;
+        self.sockets.extend(sockets);
+        self.services.push(factory);
+
+        Ok(self)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    /// Add new service to the server.
+    pub fn bind<F, S, I>(
+        mut self,
+        name: impl AsRef<str>,
+        addr: impl net::ToSocketAddrs,
+        cfg: impl Into<SharedCfg>,
+        factory: F,
+    ) -> io::Result<Self>
+    where
+        F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
+        S: Service<Cfg::State, Io> + 'static,
+        I: IntoService<S, Cfg::State, Io> + 'static,
+    {
+        let cfg = cfg.into();
+        let sockets = bind_addr(addr, self.backlog)?;
+
+        let mut tokens = Vec::new();
+        for lst in sockets {
+            let token = self.token.next();
+            self.sockets
+                .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
+            tokens.push((token, cfg.clone()));
+        }
+
+        self.services.push(factory::create_factory_service(
+            name.as_ref().to_string(),
+            tokens,
+            factory,
+        ));
+
+        Ok(self)
+    }
+
+    #[cfg(unix)]
+    /// Add new unix domain service to the server.
+    pub fn bind_uds<F, I, S>(
+        self,
+        name: impl AsRef<str>,
+        addr: impl AsRef<std::path::Path>,
+        cfg: impl Into<SharedCfg>,
+        factory: F,
+    ) -> io::Result<Self>
+    where
+        F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
+        I: IntoService<S, Cfg::State, Io> + 'static,
+        S: Service<Cfg::State, Io> + 'static,
+    {
+        use std::os::unix::net::UnixListener;
+
+        // The path must not exist when we try to bind.
+        // Try to remove it to avoid bind error.
+        if let Err(e) = std::fs::remove_file(addr.as_ref()) {
+            // NotFound is expected and not an issue. Anything else is.
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(e);
+            }
+        }
+
+        let lst = UnixListener::bind(addr)?;
+        self.listen_uds(name, lst, cfg.into(), factory)
+    }
+
+    #[cfg(unix)]
+    /// Add new unix domain service to the server.
+    /// Useful when running as a systemd service and
+    /// a socket FD can be acquired using the systemd crate.
+    pub fn listen_uds<F, I, S>(
+        mut self,
+        name: impl AsRef<str>,
+        lst: std::os::unix::net::UnixListener,
+        cfg: impl Into<SharedCfg>,
+        factory: F,
+    ) -> io::Result<Self>
+    where
+        F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
+        I: IntoService<S, Cfg::State, Io> + 'static,
+        S: Service<Cfg::State, Io> + 'static,
+    {
+        let token = self.token.next();
+        self.services.push(factory::create_factory_service(
+            name.as_ref().to_string(),
+            vec![(token, cfg.into())],
+            factory,
+        ));
+        self.sockets
+            .push((token, name.as_ref().to_string(), Listener::from_uds(lst)));
+        Ok(self)
+    }
+
+    /// Add new service to the server.
+    pub fn listen<F, S, I>(
+        mut self,
+        name: impl AsRef<str>,
+        lst: net::TcpListener,
+        cfg: impl Into<SharedCfg>,
+        factory: F,
+    ) -> io::Result<Self>
+    where
+        F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
+        S: Service<Cfg::State, Io> + 'static,
+        I: IntoService<S, Cfg::State, Io> + 'static,
+    {
+        let token = self.token.next();
+        self.services.push(factory::create_factory_service(
+            name.as_ref().to_string(),
+            vec![(token, cfg.into())],
+            factory,
+        ));
+        self.sockets
+            .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
+        Ok(self)
+    }
+
+    /// Starts processing incoming connections and return server controller.
+    pub fn run(self) -> Server<Connection> {
+        assert!(
+            !self.sockets.is_empty(),
+            "Server should have at least one bound socket"
+        );
+        let srv = StreamServer::new(self.accept.notify(), self.state, self.services);
+        let svc = self.pool.run(srv);
+
+        let sockets = self
+            .sockets
+            .into_iter()
+            .map(|sock| {
+                log::info!("Starting \"{}\" service on {}", sock.1, sock.2);
+                (sock.0, sock.2)
+            })
+            .collect();
+        self.accept.start(sockets, svc.clone());
+
+        svc
+    }
+}
+
+impl<Cfg> fmt::Debug for ServerBuilder<Cfg> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServerBuilder")
+            .field("name", &self.name)
+            .field("token", &self.token)
+            .field("backlog", &self.backlog)
+            .field("sockets", &self.sockets)
+            .field("accept", &self.accept)
+            .field("worker-pool", &self.pool)
+            .finish()
+    }
+}
+
+pub fn bind_addr<S: net::ToSocketAddrs>(
+    addr: S,
+    backlog: i32,
+) -> io::Result<Vec<net::TcpListener>> {
+    let mut err = None;
+    let mut succ = false;
+    let mut sockets = Vec::new();
+    for addr in addr.to_socket_addrs()? {
+        match create_tcp_listener(addr, backlog) {
+            Ok(lst) => {
+                succ = true;
+                sockets.push(lst);
+            }
+            Err(e) => err = Some(e),
+        }
+    }
+
+    if succ {
+        Ok(sockets)
+    } else if let Some(e) = err.take() {
+        Err(e)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Cannot bind to address.",
+        ))
+    }
+}
+
+pub fn create_tcp_listener(addr: net::SocketAddr, backlog: i32) -> io::Result<net::TcpListener> {
+    let builder = match addr {
+        net::SocketAddr::V4(_) => Socket::new(Domain::IPV4, Type::STREAM, None)?,
+        net::SocketAddr::V6(_) => Socket::new(Domain::IPV6, Type::STREAM, None)?,
+    };
+
+    // On Windows, this allows rebinding sockets which are actively in use,
+    // which allows “socket hijacking”, so we explicitly don't set it here.
+    // https://docs.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse
+    #[cfg(not(windows))]
+    builder.set_reuse_address(true)?;
+
+    builder.bind(&SockAddr::from(addr))?;
+    builder.listen(backlog)?;
+    Ok(net::TcpListener::from(builder))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bind_addr() {
+        let addrs: Vec<net::SocketAddr> = Vec::new();
+        assert!(bind_addr(&addrs[..], 10).is_err());
+    }
+
+    #[geario::test]
+    async fn test_debug() {
+        let builder = ServerBuilder::default();
+        assert!(format!("{builder:?}").contains("ServerBuilder"));
+    }
+}

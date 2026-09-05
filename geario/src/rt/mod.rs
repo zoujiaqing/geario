@@ -43,6 +43,6 @@ pub use self::rt_default::*;
 pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState>;
 pub(crate) type HashSet<V> = std::collections::HashSet<V, foldhash::fast::RandomState>;
 
-// Upstream exposes this through `ntex::rt`, which merges ntex-rt and
-// ntex-net into one namespace. The type itself lives with the reactor.
+// Re-exported here because callers look for the runtime type under `rt`,
+// while the type itself has to live next to the reactor it drives.
 pub use crate::net::DefaultRuntime;

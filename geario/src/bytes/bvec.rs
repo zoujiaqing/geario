@@ -25,7 +25,7 @@ use crate::bytes::{Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, stvec::S
 /// # Examples
 ///
 /// ```
-/// use ntex_bytes::{BytesMut, BufMut};
+/// use geario::bytes::{BytesMut, BufMut};
 ///
 /// let mut buf = BytesMut::with_capacity(64);
 ///
@@ -65,7 +65,7 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::{BytesMut, BufMut};
+    /// use geario::bytes::{BytesMut, BufMut};
     ///
     /// let mut bytes = BytesMut::with_capacity(64);
     ///
@@ -101,7 +101,7 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::{BytesMut, BufMut};
+    /// use geario::bytes::{BytesMut, BufMut};
     ///
     /// let mut bytes = BytesMut::new();
     ///
@@ -125,7 +125,7 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesMut;
+    /// use geario::bytes::BytesMut;
     ///
     /// let b = BytesMut::copy_from_slice(&b"hello"[..]);
     /// assert_eq!(b.len(), 5);
@@ -140,7 +140,7 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesMut;
+    /// use geario::bytes::BytesMut;
     ///
     /// let b = BytesMut::with_capacity(64);
     /// assert!(b.is_empty());
@@ -155,7 +155,7 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesMut;
+    /// use geario::bytes::BytesMut;
     ///
     /// let b = BytesMut::with_capacity(64);
     /// assert_eq!(b.capacity(), 64);
@@ -174,7 +174,7 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::{BytesMut, BufMut};
+    /// use geario::bytes::{BytesMut, BufMut};
     /// use std::thread;
     ///
     /// let mut b = BytesMut::with_capacity(64);
@@ -210,7 +210,7 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::{BytesMut, BufMut};
+    /// use geario::bytes::{BytesMut, BufMut};
     ///
     /// let mut buf = BytesMut::with_capacity(1024);
     /// buf.put(&b"hello world"[..]);
@@ -241,7 +241,7 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesMut;
+    /// use geario::bytes::BytesMut;
     ///
     /// let mut a = BytesMut::copy_from_slice(&b"hello world"[..]);
     /// let mut b = a.split_to(5);
@@ -270,7 +270,7 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesMut;
+    /// use geario::bytes::BytesMut;
     ///
     /// let mut a = BytesMut::copy_from_slice(&b"hello world"[..]);
     /// a.advance_to(5);
@@ -317,7 +317,7 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesMut;
+    /// use geario::bytes::BytesMut;
     ///
     /// let mut buf = BytesMut::copy_from_slice(&b"hello world"[..]);
     /// buf.truncate(5);
@@ -335,7 +335,7 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesMut;
+    /// use geario::bytes::BytesMut;
     ///
     /// let mut buf = BytesMut::copy_from_slice(&b"hello world"[..]);
     /// buf.clear();
@@ -360,7 +360,7 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesMut;
+    /// use geario::bytes::BytesMut;
     ///
     /// let mut buf = BytesMut::new();
     ///
@@ -387,7 +387,7 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesMut;
+    /// use geario::bytes::BytesMut;
     ///
     /// let mut b = BytesMut::copy_from_slice(&b"hello world"[..]);
     ///
@@ -437,7 +437,7 @@ impl BytesMut {
     /// In the following example, a new buffer is allocated.
     ///
     /// ```
-    /// use ntex_bytes::BytesMut;
+    /// use geario::bytes::BytesMut;
     ///
     /// let mut buf = BytesMut::copy_from_slice(&b"hello"[..]);
     /// buf.reserve(64);
@@ -447,7 +447,7 @@ impl BytesMut {
     /// In the following example, the existing buffer is reclaimed.
     ///
     /// ```
-    /// use ntex_bytes::{BytesMut, BufMut};
+    /// use geario::bytes::{BytesMut, BufMut};
     ///
     /// let mut buf = BytesMut::with_capacity(128);
     /// buf.put(&[0; 64][..]);
@@ -488,7 +488,7 @@ impl BytesMut {
     /// In the following example, a new buffer is allocated.
     ///
     /// ```
-    /// use ntex_bytes::BytesMut;
+    /// use geario::bytes::BytesMut;
     ///
     /// let mut buf = BytesMut::copy_from_slice(&b"hello"[..]);
     /// buf.reserve_capacity(128);
@@ -508,7 +508,7 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesMut;
+    /// use geario::bytes::BytesMut;
     ///
     /// let mut buf = BytesMut::with_capacity(0);
     /// buf.extend_from_slice(b"aaabbb");
@@ -526,7 +526,7 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::{Buf, BytesMut};
+    /// use geario::bytes::{Buf, BytesMut};
     ///
     /// let buf = BytesMut::copy_from_slice(&b"abc"[..]);
     /// let mut iter = buf.iter();

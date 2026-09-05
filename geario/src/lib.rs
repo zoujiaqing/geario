@@ -17,5 +17,6 @@ pub mod error;
 pub mod io;
 pub mod net;
 pub mod rt;
+pub mod server;
 pub mod service;
 pub mod util;
