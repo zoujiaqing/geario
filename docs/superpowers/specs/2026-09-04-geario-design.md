@@ -95,20 +95,61 @@ geario/
 | `ntex-service` | `src/service/` | 6,119 |
 | `ntex-rt` | `src/rt/` | 2,831 |
 | `ntex-io` | `src/io/` | 5,634 |
-| `ntex-dispatcher` | `src/io/dispatcher/` | 1,385 |
+| `ntex-dispatcher` | `src/dispatcher/` | 1,385 |
 | `ntex-net` | `src/net/` | 6,092 |
 | `ntex-server` | `src/server/` | 3,311 |
 | | **合计** | **42,062** |
 
-**`bytes` 与 `codec` 保持原名、保持目录形式**,即使 `codec` 只有 101 行也开目录。
-唯一偏离 1:1 的是:
-
-- **`dispatcher` 收进 `io/`**:仅 1 个 `pub fn`、4 个公开类型,是 `io` 的直接下游。
-  上游 `ntex-dispatcher/Cargo.toml:9` 已把 `documentation` 指向 `docs.rs/ntex-io/`,
-  合并符合上游意图。
+**全部 10 个 crate 与模块 1:1 对应**,包括 `bytes` 与 `codec`——即使 `codec` 只有
+101 行也开目录,`dispatcher` 也保持顶层独立(理由见下)。
 
 `codec` 的路径是**稳定 API**:`geario-http` 将直接实现 `crate::codec::{Decoder, Encoder}`。
 阶段二起不得移动或改名。
+
+### `dispatcher` 为什么保持顶层独立
+
+`Dispatcher<U, Err>` 是**通用帧式协议的连接循环**,不是 `io` 的实现细节:
+
+```rust
+pub fn new<Io>(io: Io, codec: U, service: Pipeline<DispatchItem<U>, Option<Response<U>>, Err>)
+where U: Decoder + Encoder
+```
+
+只要提供一个 `Codec` 和一个 `Service`,整条循环就白送——读帧、派发、写回、
+keep-alive 超时、read 超时、写背压(`Control::WBackPressureEnabled/Disabled`)、
+优雅关闭(`Reason`)全部内置。这是快速封装新协议的入口。
+
+**依赖方向是 `dispatcher → {io, codec, service, util}`**,它是 `io` 的消费者而非下游
+实现,放进 `io/` 会让同一目录混装抽象层与其消费者。
+
+**与 h1 dispatcher 的关系:无。** `ntex-dispatcher` 内**没有任何 trait**
+(全文只有 `impl Future for Dispatcher`),`ntex/src/http/h1/dispatcher.rs` 的
+`Dispatcher<F, B, Err>` 与之零类型关联,是重名的两个独立 struct。
+
+h1 不复用它的原因是**模型不匹配**:通用 dispatcher 是"一帧进 → 一个 response 出"
+(`Option<Response<U>>`),而 HTTP/1.1 的请求体与响应体都是流,还需要独立的 control
+service 通道(见 h1 的 `State` 枚举:`ReadRequest`/`ReadPayload`/`SendPayload`/
+`CallPublish`/`CallControl`),因此另写了 1,310 行。
+
+实际用户:`ntex/src/ws/client.rs`、`ntex/src/web/ws.rs`,以及生态外部的
+`ntex-mqtt`/`ntex-amqp`。`ntex/src/http/` 对 `DispatchItem`/`ntex_dispatcher` 零引用。
+**`geario-http`(阶段二)不需要它**;它面向 WebSocket、RPC 与自定义 TCP 协议。
+
+#### 对外路径
+
+主路径改为 `geario::dispatcher::*`,更符合"协议脚手架入口"的定位。
+同时在 `geario::io` 下**保留 re-export**,照抄上游 `ntex/src/lib.rs:102-105`:
+
+```rust
+pub mod io {
+    pub use crate::dispatcher::*;
+    pub use crate::io::*;   // 实际写法见实现计划
+}
+```
+
+保留别名的目的是让移植过来的代码与示例(`crate::io::Dispatcher::new(...)`)一行不改,
+不破坏"不改公开 API 形状"的护栏;日后要弃用 `io` 下的别名也干净。
+该改动零行为、零性能影响,不威胁 benchmark 可比性。
 
 `util/` 保留原名。其内部 `time`/`channel`/`future`/`services` 四块共 6,510 行被
 `io`/`net`/`service` 广泛引用,阶段一拆分风险最高,推迟到后续阶段。
