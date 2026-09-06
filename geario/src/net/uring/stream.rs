@@ -515,6 +515,35 @@ impl StreamItem {
     fn tag(&self) -> &'static str {
         self.ctx.tag()
     }
+
+    /// Write `bufs` to the socket now, outside the ring.
+    ///
+    /// The caller has established that nothing is queued or in flight ahead
+    /// of `bufs`, so a short write is reported as such and the caller buffers
+    /// the rest through the ordinary path.
+    fn write_bufs(&mut self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+        if bufs.is_empty() {
+            return Ok(0);
+        }
+
+        let fd = self.io.as_raw_fd();
+        let res = if bufs.len() == 1 {
+            crate::syscall!(break libc::write(fd, bufs[0].as_ptr().cast(), bufs[0].len()))
+        } else {
+            let len = i32::try_from(bufs.len()).unwrap_or(i32::MAX);
+            crate::syscall!(break libc::writev(fd, bufs.as_ptr().cast(), len))
+        }?;
+
+        match res {
+            std::task::Poll::Ready(0) => {
+                self.ctx.stop(None);
+                Err(io::Error::from(io::ErrorKind::WriteZero))
+            }
+            std::task::Poll::Ready(n) => Ok(n),
+            // Full socket; the caller buffers, which queues a send.
+            std::task::Poll::Pending => Ok(0),
+        }
+    }
 }
 
 impl StreamCtl {
@@ -573,6 +602,26 @@ impl WeakStreamCtl {
         F: FnOnce(&Socket) -> R,
     {
         self.inner.with(|storage| f(&storage.streams[self.id].io))
+    }
+
+    /// Write `bufs` straight to the socket.
+    ///
+    /// `None` when the storage is busy, or when a send is already in flight:
+    /// the driver hands the write buffer to the ring, so an in-flight send
+    /// holds bytes that are no longer in the buffer and must go out first.
+    pub(crate) fn write_bufs(&self, bufs: &[io::IoSlice<'_>]) -> Option<io::Result<usize>> {
+        let mut storage = self.inner.storage.take()?;
+        let res = storage
+            .streams
+            .get_mut(self.id)
+            .filter(|item| {
+                item.wr_op.is_none()
+                    && !item.flags.contains(Flags::WR_CANCELING)
+                    && !item.ctx.is_stopped()
+            })
+            .map(|item| item.write_bufs(bufs));
+        self.inner.storage.set(Some(storage));
+        res
     }
 }
 

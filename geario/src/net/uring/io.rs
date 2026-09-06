@@ -28,6 +28,14 @@ impl crate::io::IoStream for super::UnixStream {
 struct HandleWrapper(WeakStreamCtl);
 
 impl Handle for HandleWrapper {
+    fn write_bufs(
+        &self,
+        _: &IoContext,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> Option<std::io::Result<usize>> {
+        self.0.write_bufs(bufs)
+    }
+
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::PeerAddr>() {
             let addr = self.0.with_io(|io| io.peer_addr().ok());
