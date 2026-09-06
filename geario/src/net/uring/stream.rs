@@ -1,4 +1,4 @@
-use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc};
+use std::{cell::Cell, cmp, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc};
 
 use crate::bytes::{BufMut, BytePage, BytePages, BytesMut};
 use crate::io::{IoContext, IoTaskStatus};
@@ -178,6 +178,21 @@ impl Operation {
     }
 }
 
+/// Put back whatever the socket did not take.
+///
+/// A send reports how many bytes it accepted, and on a socket that is nearly
+/// full that is fewer than were offered. The page was taken out of the write
+/// buffer to be submitted, so dropping it here loses the tail: the peer waits
+/// forever for bytes the sender believes it has written.
+fn requeue_unsent(item: &mut StreamItem, mut buf: BytePage, res: &io::Result<usize>) {
+    let sent = cmp::min(res.as_ref().copied().unwrap_or(0), buf.len());
+    if sent == buf.len() {
+        return;
+    }
+    buf.advance_to(sent);
+    item.ctx.with_write_buf(|pages| pages.prepend(buf));
+}
+
 impl Handler for StreamOpsHandler {
     fn canceled(&mut self, user_data: usize) {
         self.inner
@@ -276,7 +291,9 @@ impl Handler for StreamOpsHandler {
                         );
 
                         if cqueue::notif(flags) {
-                            let res = result.unwrap_or(res).map(|n| {
+                            let res = result.unwrap_or(res);
+                            requeue_unsent(item, buf, &res);
+                            let res = res.map(|n| {
                                 if n == 0 {
                                     item.ctx.stop(None);
                                 }
@@ -289,8 +306,14 @@ impl Handler for StreamOpsHandler {
                             // reset op reference
                             item.wr_op.take();
 
-                            // try to send next chunk
-                            if res.is_ok() {
+                            // Only move on when the socket took the whole
+                            // page. On a short send the tail has to go back
+                            // to the front of the write buffer, and it cannot
+                            // until the notify arrives and the kernel is done
+                            // with it. Sending the next page first would put
+                            // the tail behind it.
+                            let complete = matches!(res, Ok(n) if n >= buf.len());
+                            if res.is_ok() && complete {
                                 st.send(id, &self.inner.api);
                             }
                             // insert op back for "notify" handling
@@ -303,6 +326,8 @@ impl Handler for StreamOpsHandler {
                         } else {
                             // reset op reference
                             item.wr_op.take();
+
+                            requeue_unsent(item, buf, &res);
 
                             // release buffer and try to send next chunk
                             let res = res.map(|n| {
@@ -374,6 +399,21 @@ impl StreamOpsStorage {
                 log::trace!("{}: Rcv({id})", item.ctx.tag());
 
                 let mut buf = item.ctx.get_read_buf();
+                if !buf.is_empty() {
+                    // These are bytes the consumer has not taken yet. This
+                    // driver holds the buffer it submits until the read
+                    // completes, so handing this one to the kernel would make
+                    // those bytes invisible for as long as that takes -- and
+                    // when the peer is waiting on a response that depends on
+                    // them, that is forever.
+                    //
+                    // Leave them where the consumer can reach them and read
+                    // into a fresh buffer. What comes back is appended after
+                    // them, so the order is kept.
+                    item.ctx.update_read_status(buf, Ok(0));
+                    buf = BytesMut::new();
+                    item.ctx.resize_read_buf(&mut buf);
+                }
                 let s = buf.chunk_mut();
                 let buf_ptr = s.as_mut_ptr();
                 let buf_len = s.len() as u32;
