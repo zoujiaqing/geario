@@ -8,7 +8,7 @@ use crate::syscall;
 use slab::Slab;
 use socket2::Socket;
 
-use super::{Event, Handler, Reactor, ReactorApi};
+use super::{Event, Handler, PollMode, Reactor, ReactorApi};
 use crate::net::helpers::Queue;
 
 const MAX_WRITE_SIZE: usize = 64 * 1024;
@@ -29,6 +29,8 @@ bitflags::bitflags! {
     struct Flags: u8 {
         const RD          = 0b0000_0001;
         const WR          = 0b0000_0010;
+        const ARM_RD      = 0b0000_0100;
+        const ARM_WR      = 0b0000_1000;
         const DROPPED_PRI = 0b0001_0000;
         const DROPPED_SEC = 0b0010_0000;
     }
@@ -93,9 +95,12 @@ impl StreamOps {
             }
         });
 
-        self.0
-            .api
-            .attach(fd, stream.id, Event::new(0, false, false));
+        self.0.api.attach_with_mode(
+            fd,
+            stream.id,
+            Event::new(0, false, false).with_interrupt(),
+            PollMode::Level,
+        );
 
         let weak = WeakStreamCtl {
             id: stream.id,
@@ -163,7 +168,7 @@ impl Handler for StreamOpsHandler {
                     renew.readable,
                     renew.writable
                 );
-                self.inner.api.modify(io.fd(), id as u32, renew);
+                io.arm(&self.inner.api, id as u32, renew);
             }
         });
     }
@@ -351,7 +356,7 @@ impl StreamOpsInner {
                     event.readable,
                     event.writable
                 );
-                self.api.modify(io.fd(), id, event);
+                io.arm(&self.api, id, event);
             }
         });
     }
@@ -422,6 +427,27 @@ impl StreamItem {
 
     fn tag(&self) -> &'static str {
         self.ctx.tag()
+    }
+
+    /// Register `event` as the stream's poll interest, if it is not already
+    /// what the poller holds.
+    ///
+    /// The fd is registered level-triggered, so the poller keeps reporting a
+    /// readiness for as long as it lasts and the interest survives delivery.
+    /// Re-registering an unchanged interest is then a syscall that buys
+    /// nothing, and in a request/response workload the interest is the same on
+    /// almost every wakeup: readable, with writable added only while a write is
+    /// short.
+    fn arm(&mut self, api: &ReactorApi, id: u32, event: Event) {
+        let mut armed = Flags::empty();
+        armed.set(Flags::ARM_RD, event.readable);
+        armed.set(Flags::ARM_WR, event.writable);
+        if self.flags.intersection(Flags::ARM_RD | Flags::ARM_WR).bits() == armed.bits() {
+            return;
+        }
+        self.flags.remove(Flags::ARM_RD | Flags::ARM_WR);
+        self.flags.insert(armed);
+        api.modify_with_mode(self.fd(), id, event, PollMode::Level);
     }
 
     fn write(&mut self) -> IoTaskStatus {
