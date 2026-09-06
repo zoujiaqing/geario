@@ -127,18 +127,20 @@ mod tests {
     use crate::util::future::lazy;
     use tls_rustls::RootCertStore;
 
+    /// A handshake against something that does not speak TLS has to fail.
+    ///
+    /// A successful handshake, with verification, is covered end to end in
+    /// `tests/tls_rustls.rs`; this covers the connector service itself.
     #[geario::test]
     async fn test_rustls_connect() {
-        let server = ntex::server::test_server(async || {
-            ntex::service::fn_service(async |_| Ok::<_, ()>(()))
+        let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = lst.local_addr().unwrap();
+        crate::rt::spawn(async move {
+            let _ = crate::rt::spawn_blocking(move || lst.accept()).await;
         });
 
-        let cert_store = webpki_roots::TLS_SERVER_ROOTS
-            .iter()
-            .cloned()
-            .collect::<RootCertStore>();
         let config = ClientConfig::builder()
-            .with_root_certificates(cert_store)
+            .with_root_certificates(RootCertStore::empty())
             .with_no_client_auth();
         let _: TlsConnector<Connector<&'static str>> = TlsConnector::new(config.clone()).clone();
         let svc = TlsConnector::from(Arc::new(config)).clone();
@@ -147,9 +149,7 @@ mod tests {
         let srv = Pipeline::with(SharedCfg::default(), svc);
         // always ready
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
-        let result = srv
-            .call(Connect::new("").set_addr(Some(server.addr())))
-            .await;
+        let result = srv.call(Connect::new("").set_addr(Some(addr))).await;
         assert!(result.is_err());
     }
 }

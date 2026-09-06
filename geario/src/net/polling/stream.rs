@@ -407,6 +407,20 @@ impl WeakStreamCtl {
     pub(super) fn write(&self) {
         self.inner.write_stream(self.id);
     }
+
+    /// Write `bufs` straight to the socket.
+    ///
+    /// `None` when the streams slab is busy, which happens when a write is
+    /// initiated from inside event handling. The caller buffers instead.
+    pub(super) fn write_bufs(&self, bufs: &[io::IoSlice<'_>]) -> Option<io::Result<usize>> {
+        let mut streams = self.inner.streams.take()?;
+        let res = streams
+            .get_mut(self.id as usize)
+            .filter(|item| !item.ctx.is_stopped())
+            .map(|item| item.write_bufs(bufs));
+        self.inner.streams.set(Some(streams));
+        res
+    }
 }
 
 impl Drop for WeakStreamCtl {
@@ -519,6 +533,37 @@ impl StreamItem {
             }
         });
         self.ctx.update_write_status(res)
+    }
+
+    /// Write `bufs` to the socket without going through the write buffer.
+    ///
+    /// The caller has already established that nothing is queued ahead of
+    /// `bufs`, so a short write is reported as such and the caller retries;
+    /// there is nothing here that could be written out of order.
+    fn write_bufs(&mut self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+        let bufs = &bufs[..cmp::min(bufs.len(), MAX_WRITE_ITEMS)];
+        if bufs.is_empty() {
+            return Ok(0);
+        }
+
+        let fd = self.fd();
+        let res = if bufs.len() == 1 {
+            syscall!(break libc::write(fd, bufs[0].as_ptr().cast(), bufs[0].len()))
+        } else {
+            syscall!(break libc::writev(fd, bufs.as_ptr().cast(), bufs.len() as i32))
+        }?;
+
+        match res {
+            // A zero-length write to a socket that is not full means the peer
+            // is gone; report it the way the buffered path does.
+            Poll::Ready(0) => {
+                self.ctx.stop(None);
+                Err(io::Error::from(io::ErrorKind::WriteZero))
+            }
+            Poll::Ready(n) => Ok(n),
+            // Full socket. The caller buffers, which arms the write interest.
+            Poll::Pending => Ok(0),
+        }
     }
 
     fn read(&mut self) -> IoTaskStatus {

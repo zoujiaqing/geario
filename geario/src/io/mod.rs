@@ -6,7 +6,7 @@
     clippy::missing_panics_doc,
     clippy::must_use_candidate
 )]
-use std::io::{Error as IoError, Result as IoResult};
+use std::io::{Error as IoError, IoSlice, Result as IoResult};
 use std::{any::Any, any::TypeId, fmt, task::Poll};
 
 pub mod cfg;
@@ -113,6 +113,18 @@ pub trait Handle {
     #[inline]
     /// Initiate io write operation
     fn write(&self, _: &IoContext) {}
+
+    #[inline]
+    /// Write `bufs` straight to the underlying socket, bypassing the write
+    /// buffer.
+    ///
+    /// `None` means the driver cannot do this, now or at all, and the caller
+    /// must go through the write buffer instead. A driver that can must only
+    /// attempt the write when it would not reorder bytes, and must report a
+    /// short write rather than blocking.
+    fn write_bufs(&self, _: &IoContext, _: &[IoSlice<'_>]) -> Option<IoResult<usize>> {
+        None
+    }
 
     #[inline]
     /// Called when readiness changes

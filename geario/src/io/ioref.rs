@@ -184,6 +184,40 @@ impl IoRef {
         }
     }
 
+    /// Write `bufs` straight to the socket, bypassing the write buffer.
+    ///
+    /// Returns the number of bytes the socket took, which may be fewer than
+    /// were offered, or `Ok(0)` when the write could not be attempted at all.
+    /// `Ok(0)` is not a failure: it means the caller has to go through
+    /// `with_write_buf` as usual.
+    ///
+    /// This exists to keep a large response from being copied into the write
+    /// buffer only to be copied again into the socket. It is attempted only
+    /// when nothing is queued ahead of `bufs`, so it cannot reorder bytes, and
+    /// only when the filter chain passes the write buffer through unchanged,
+    /// since a filter that transforms what it is given has to see the bytes.
+    pub fn try_write_vectored(&self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+        let st = &self.0;
+        if st.flags.is_stopping_any()
+            || st.buffer.write_buf_size() != 0
+            || !st.filter().is_transparent()
+        {
+            return Ok(0);
+        }
+
+        let Some(hnd) = st.handle.take() else {
+            return Ok(0);
+        };
+        let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
+        let res = hnd.write_bufs(ctx, bufs);
+        st.handle.set(Some(hnd));
+
+        match res {
+            Some(res) => res,
+            None => Ok(0),
+        }
+    }
+
     /// Get access to filter buffer
     pub fn with_buf<F, R>(&self, f: F) -> io::Result<R>
     where

@@ -49,6 +49,16 @@ pub trait Filter: 'static {
 
     /// Checks whether write operations may proceed.
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
+
+    /// Reports whether the filter passes the write buffer through unchanged.
+    ///
+    /// Only a transparent chain may have bytes handed straight to the socket
+    /// by `IoRef::try_write_vectored`; anything that transforms what it is
+    /// given (TLS, compression) has to see the bytes first.
+    #[inline]
+    fn is_transparent(&self) -> bool {
+        false
+    }
 }
 
 impl Filter for Base {
@@ -109,6 +119,11 @@ impl Filter for Base {
     #[inline]
     fn shutdown(&self, _: &mut FilterCtx<'_>) -> io::Result<Poll<()>> {
         Ok(Poll::Ready(()))
+    }
+
+    #[inline]
+    fn is_transparent(&self) -> bool {
+        true
     }
 }
 

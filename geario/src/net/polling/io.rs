@@ -41,6 +41,10 @@ impl Handle for HandleWrapper {
     fn write(&self, _: &IoContext) {
         self.0.write();
     }
+
+    fn write_bufs(&self, _: &IoContext, bufs: &[std::io::IoSlice<'_>]) -> Option<std::io::Result<usize>> {
+        self.0.write_bufs(bufs)
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
