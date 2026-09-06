@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use std::{cell::Cell, fmt, io, sync::Arc, sync::mpsc, thread};
 use std::{collections::VecDeque, num::NonZeroUsize};
 
-use ntex_polling::{Event, Events, Poller};
+use geario_polling::{Event, Events, Poller};
 use crate::rt::System;
 use crate::util::{future::Either, time::Millis, time::sleep};
 

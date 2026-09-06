@@ -24,3 +24,15 @@ layout and crate paths adapted to geario. Code logic is unchanged:
 
 geario-macros is a port of ntex-macros, limited to the runtime
 attribute macros; the web routing macros were not ported.
+
+geario-polling is a fork of ntex-polling 3.10.0, which is itself a fork
+of the polling crate:
+
+  polling — https://github.com/smol-rs/polling
+  Copyright (c) Stjepan Glavina <stjepang@gmail.com>
+                John Nunley <dev@notgull.net>
+  Licensed under MIT OR Apache-2.0
+
+The epoll backend was changed so that a wait does not re-register the
+notifier and the timerfd every time, and does not set a timeout that is
+already set. Everything else is unchanged.

@@ -44,7 +44,7 @@ core_affinity = { workspace = true }
 uuid = { workspace = true }
 http = { workspace = true }
 tls_rustls = { workspace = true, optional = true }
-ntex-polling = { workspace = true }
+geario-polling = { workspace = true }
 socket2 = { workspace = true, features = ["all"] }
 compio-buf = { workspace = true, optional = true }
 compio-io = { workspace = true, optional = true }
