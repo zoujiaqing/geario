@@ -23,7 +23,16 @@ SECS="${SECS:-8}"
 PAYLOAD="${PAYLOAD:-128}"
 LAT_CONNS="${LAT_CONNS:-1}"
 TPUT_CONNS="${TPUT_CONNS:-12}"
-BIN="$(cd "$(dirname "$0")" && pwd)/target/release"
+# Built binaries usually sit under target/release, but a cross-compiled set
+# gets copied next to this script instead.
+HERE="$(cd "$(dirname "$0")" && pwd)"
+if [ -x "$HERE/target/release/client" ]; then
+    BIN="$HERE/target/release"
+else
+    BIN="$HERE"
+fi
+GPORT="${GPORT:-18080}"
+NPORT="${NPORT:-18081}"
 
 CORES=$(sysctl -n hw.ncpu 2>/dev/null || nproc)
 load=$(uptime | sed 's/.*averages*:[ ]*//' | awk '{print $1}' | tr -d ',')
@@ -47,7 +56,7 @@ wait_port() {
 # strays alive often enough to matter, and a stray holds its port and competes
 # for CPU with the round after it.
 run_one() {
-    "$BIN/$1" >/dev/null 2>&1 &
+    BENCH_ADDR="127.0.0.1:$2" "$BIN/$1" >/dev/null 2>&1 &
     pid=$!
     wait_port "$2"
     "$BIN/client" "127.0.0.1:$2" "$3" "$SECS" "$PAYLOAD" \
@@ -59,8 +68,8 @@ run_one() {
 # One discarded round: the first pays for page faults and for cores still
 # ramping their clocks.
 echo "# warmup" >&2
-run_one server-geario 8080 "$TPUT_CONNS" >/dev/null
-run_one server-ntex 8081 "$TPUT_CONNS" >/dev/null
+run_one server-geario "$GPORT" "$TPUT_CONNS" >/dev/null
+run_one server-ntex "$NPORT" "$TPUT_CONNS" >/dev/null
 
 for mode in latency throughput; do
     case "$mode" in
@@ -69,9 +78,9 @@ for mode in latency throughput; do
     esac
     echo "# mode=$mode conns=$conns rounds=$ROUNDS secs=$SECS payload=$PAYLOAD cores=$CORES"
     for _ in $(seq 1 "$ROUNDS"); do
-        set -- $(run_one server-geario 8080 "$conns")
+        set -- $(run_one server-geario "$GPORT" "$conns")
         gq=$1 gp=$2
-        set -- $(run_one server-ntex 8081 "$conns")
+        set -- $(run_one server-ntex "$NPORT" "$conns")
         nq=$1 np=$2
         echo "$gq $nq $gp $np"
     done

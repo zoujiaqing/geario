@@ -9,11 +9,18 @@ set -eu
 
 SECS="${SECS:-5}"
 PAYLOAD="${PAYLOAD:-128}"
-BIN="$(cd "$(dirname "$0")" && pwd)/target/release"
+# Built binaries usually sit under target/release, but a cross-compiled set
+# gets copied next to this script instead.
+HERE="$(cd "$(dirname "$0")" && pwd)"
+if [ -x "$HERE/target/release/client" ]; then
+    BIN="$HERE/target/release"
+else
+    BIN="$HERE"
+fi
 SERVER="${SERVER:-server-geario}"
-PORT="${PORT:-8080}"
+PORT="${PORT:-18080}"
 
-"$BIN/$SERVER" >/dev/null 2>&1 &
+BENCH_ADDR="127.0.0.1:$PORT" "$BIN/$SERVER" >/dev/null 2>&1 &
 pid=$!
 trap 'kill $pid 2>/dev/null || true' EXIT
 for _ in $(seq 1 100); do nc -z 127.0.0.1 "$PORT" 2>/dev/null && break; sleep 0.1; done

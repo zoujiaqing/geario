@@ -6,12 +6,14 @@ use ntex_service::cfg::SharedCfg;
 use ntex_service::fn_service;
 
 fn main() -> io::Result<()> {
+    let addr = std::env::var("BENCH_ADDR").unwrap_or_else(|_| "127.0.0.1:18081".into());
+
     ntex_rt::System::build()
         .name("bench")
         .build(ntex_net::DefaultRuntime)
         .block_on(async {
             ntex_server::net::build()
-                .bind("echo", "127.0.0.1:8081", SharedCfg::new("ECHO"), async |_| {
+                .bind("echo", addr, SharedCfg::new("ECHO"), async |_| {
                     fn_service(async |io: Io| {
                         let codec = BytesCodec;
                         loop {

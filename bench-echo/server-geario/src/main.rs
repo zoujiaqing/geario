@@ -7,8 +7,12 @@ use geario::service::fn_service;
 
 #[geario::main]
 async fn main() -> io::Result<()> {
+    // Configurable because the default collides with whatever else the host
+    // happens to be running.
+    let addr = std::env::var("BENCH_ADDR").unwrap_or_else(|_| "127.0.0.1:18080".into());
+
     geario::server::net::build()
-        .bind("echo", "127.0.0.1:8080", SharedCfg::new("ECHO"), async |_| {
+        .bind("echo", addr, SharedCfg::new("ECHO"), async |_| {
             fn_service(async |io: Io| {
                 let codec = BytesCodec;
                 loop {

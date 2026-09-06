@@ -10,7 +10,8 @@ use ntex_io_uring::cqueue::{self, Entry as CEntry, more};
 use ntex_io_uring::opcode::{AsyncCancel, PollAdd};
 use ntex_io_uring::squeue::{Entry as SEntry, SubmissionQueue};
 use ntex_io_uring::{IoUring, Probe, types::CancelBuilder, types::Fd};
-use crate::rt::{DriverType, Notify, PollResult, Runtime, syscall};
+use crate::rt::{DriverType, Notify, PollResult, Runtime};
+use crate::syscall;
 use crate::service::cfg::SharedCfg;
 use socket2::{Protocol, SockAddr, Socket, Type};
 
