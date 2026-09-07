@@ -54,18 +54,15 @@ async fn handshake_then_echo() {
     let acceptor_cfg = server_cfg.clone();
     geario::rt::spawn(async move {
         let accepted = geario::rt::spawn_blocking(move || lst.accept()).await;
-        let Ok(Ok((stream, _))) = accepted else { return };
-        stream.set_nonblocking(true).ok();
-        let Ok(io) = geario::net::from_tcp_stream(stream, SharedCfg::new("TLS-SRV").into())
-        else {
+        let Ok(Ok((stream, _))) = accepted else {
             return;
         };
-        let Ok(io) = TlsServerFilter::create(
-            io,
-            acceptor_cfg,
-            geario::util::time::Millis(5_000),
-        )
-        .await
+        stream.set_nonblocking(true).ok();
+        let Ok(io) = geario::net::from_tcp_stream(stream, SharedCfg::new("TLS-SRV").into()) else {
+            return;
+        };
+        let Ok(io) =
+            TlsServerFilter::create(io, acceptor_cfg, geario::util::time::Millis(5_000)).await
         else {
             return;
         };
@@ -121,10 +118,11 @@ async fn handshake_rejects_an_untrusted_chain() {
 
     geario::rt::spawn(async move {
         let accepted = geario::rt::spawn_blocking(move || lst.accept()).await;
-        let Ok(Ok((stream, _))) = accepted else { return };
+        let Ok(Ok((stream, _))) = accepted else {
+            return;
+        };
         stream.set_nonblocking(true).ok();
-        let Ok(io) = geario::net::from_tcp_stream(stream, SharedCfg::new("TLS-SRV").into())
-        else {
+        let Ok(io) = geario::net::from_tcp_stream(stream, SharedCfg::new("TLS-SRV").into()) else {
             return;
         };
         let _ = TlsServerFilter::create(io, server_cfg, geario::util::time::Millis(5_000)).await;

@@ -9,10 +9,8 @@
 )]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-
 #[cfg(feature = "rustls")]
 pub mod rustls;
-
 
 use crate::service::cfg::{CfgContext, Configuration};
 use crate::util::{services::Counter, time::Millis, time::Seconds};

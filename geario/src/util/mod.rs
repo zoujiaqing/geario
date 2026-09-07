@@ -15,8 +15,8 @@ pub mod services;
 pub mod task;
 pub mod time;
 
-pub use futures_core::Stream;
 pub use crate::rt::spawn;
+pub use futures_core::Stream;
 
 #[doc(hidden)]
 pub use hashbrown::{Equivalent, hash_map, hash_set};

@@ -23,7 +23,9 @@ fn many_connections() {
 
     for (i, reader, _) in connections.iter() {
         unsafe {
-            poller.add(reader, geario_polling::Event::readable(*i)).unwrap();
+            poller
+                .add(reader, geario_polling::Event::readable(*i))
+                .unwrap();
         }
     }
 

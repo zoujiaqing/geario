@@ -359,7 +359,11 @@ where
                     log::info!("Shutting down {:?} worker gracefuly", self.name);
                     self.availability.set(false);
 
-                    let timeout = if timeout.is_zero() { STOP_TIMEOUT } else { timeout };
+                    let timeout = if timeout.is_zero() {
+                        STOP_TIMEOUT
+                    } else {
+                        timeout
+                    };
                     self.stop(timeout, Some(result)).await;
                     return;
                 }

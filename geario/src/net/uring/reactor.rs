@@ -6,13 +6,13 @@ use std::{cmp, collections::VecDeque, fmt, io, mem, net, ptr, rc::Rc, sync::Arc}
 use std::os::unix::net::UnixStream as OsUnixStream;
 
 use crate::io::Io;
+use crate::rt::{DriverType, Notify, PollResult, Runtime};
+use crate::service::cfg::SharedCfg;
+use crate::syscall;
 use ntex_io_uring::cqueue::{self, Entry as CEntry, more};
 use ntex_io_uring::opcode::{AsyncCancel, PollAdd};
 use ntex_io_uring::squeue::{Entry as SEntry, SubmissionQueue};
 use ntex_io_uring::{IoUring, Probe, types::CancelBuilder, types::Fd};
-use crate::rt::{DriverType, Notify, PollResult, Runtime};
-use crate::syscall;
-use crate::service::cfg::SharedCfg;
 use socket2::{Protocol, SockAddr, Socket, Type};
 
 use super::{TcpStream, UnixStream, stream::StreamOps};

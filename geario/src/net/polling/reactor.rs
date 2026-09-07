@@ -6,9 +6,9 @@ use std::{collections::VecDeque, num::NonZeroUsize, time::Duration};
 use std::os::unix::net::UnixStream as OsUnixStream;
 
 use crate::io::Io;
-use geario_polling::{Event, Events, PollMode, Poller};
 use crate::rt::{DriverType, Notify, PollResult, Runtime};
 use crate::service::cfg::SharedCfg;
+use geario_polling::{Event, Events, PollMode, Poller};
 use socket2::{Protocol, SockAddr, Socket, Type};
 
 use super::{TcpStream, UnixStream, stream::StreamOps};

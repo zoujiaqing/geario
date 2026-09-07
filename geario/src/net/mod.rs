@@ -162,10 +162,19 @@ impl Runner for DefaultRuntime {
                 })
             }
 
-            #[cfg(all(target_os = "linux", feature = "neon-uring"))]
+            #[cfg(all(
+                target_os = "linux",
+                feature = "neon-uring",
+                not(feature = "neon-polling")
+            ))]
             {
+                // Asked for by name, so a failure is reported rather than
+                // quietly answered with a different driver. The kernel's
+                // reason is carried out: "cannot construct" on its own sends
+                // whoever hits it looking in the wrong place.
                 let driver: Box<dyn Reactor> = Box::new(
-                    crate::net::uring::Reactor::new(2048).expect("Cannot construct io-uring reactor"),
+                    crate::net::uring::Reactor::new(2048)
+                        .unwrap_or_else(|e| panic!("Cannot construct io-uring reactor: {e}")),
                 );
 
                 with_reactor(&driver, || {
@@ -176,16 +185,26 @@ impl Runner for DefaultRuntime {
                 })
             }
 
-            #[cfg(all(not(feature = "neon-uring"), not(feature = "neon-polling")))]
+            // Reached when nothing was asked for, and also when io_uring was
+            // asked for on a platform that has none: the request cannot be
+            // honoured, and the alternative to picking a driver here is a
+            // build that does not compile at all.
+            #[cfg(all(
+                not(feature = "neon-polling"),
+                any(not(feature = "neon-uring"), not(target_os = "linux"))
+            ))]
             {
+                // Nothing was asked for: prefer io_uring, fall back quietly.
                 #[cfg(target_os = "linux")]
-                let driver: Box<dyn Reactor> = if let Ok(reactor) = crate::net::uring::Reactor::new(2048)
-                {
-                    Box::new(reactor)
-                } else {
-                    Box::new(
-                        crate::net::polling::Reactor::new().expect("Cannot construct io-uring reactor"),
-                    )
+                let driver: Box<dyn Reactor> = match crate::net::uring::Reactor::new(2048) {
+                    Ok(reactor) => Box::new(reactor),
+                    Err(e) => {
+                        log::debug!("No io-uring reactor ({e}), using polling");
+                        Box::new(
+                            crate::net::polling::Reactor::new()
+                                .expect("Cannot construct polling reactor"),
+                        )
+                    }
                 };
 
                 #[cfg(not(target_os = "linux"))]

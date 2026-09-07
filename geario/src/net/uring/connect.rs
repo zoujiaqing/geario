@@ -1,9 +1,9 @@
 use std::{cell::RefCell, io, os::fd::AsRawFd, rc::Rc};
 
 use crate::io::Io;
-use ntex_io_uring::{opcode, types::Fd};
 use crate::rt::Arbiter;
 use crate::service::cfg::SharedCfg;
+use ntex_io_uring::{opcode, types::Fd};
 use slab::Slab;
 use socket2::{Domain, SockAddr, Socket};
 

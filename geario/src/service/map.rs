@@ -198,7 +198,12 @@ mod tests {
 
     #[geario::test]
     async fn test_pipeline() {
-        let srv = Pipeline::with((), crate::service::service(Srv::default()).map(|()| "ok").clone());
+        let srv = Pipeline::with(
+            (),
+            crate::service::service(Srv::default())
+                .map(|()| "ok")
+                .clone(),
+        );
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");

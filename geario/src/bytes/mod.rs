@@ -75,8 +75,8 @@ mod stvec;
 mod stext;
 mod stext_arc;
 
-pub use crate::bytes::bvec::BytesMut;
 pub use self::bytes::Bytes;
+pub use crate::bytes::bvec::BytesMut;
 pub use crate::bytes::pages::{BytePage, BytePages};
 pub use crate::bytes::stext::{StorageExt, StorageExtStr, StorageVTable};
 pub use crate::bytes::string::ByteString;

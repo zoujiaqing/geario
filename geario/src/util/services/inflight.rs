@@ -82,8 +82,8 @@ where
 mod tests {
     use std::{cell::Cell, cell::RefCell, rc::Rc, task::Poll, time::Duration};
 
-    use async_channel as mpmc;
     use crate::service::{Pipeline, apply, fn_factory};
+    use async_channel as mpmc;
 
     use super::*;
     use crate::util::{channel::oneshot, future::lazy};

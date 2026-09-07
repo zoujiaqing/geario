@@ -1,11 +1,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cell::Cell, cell::RefCell, collections::VecDeque, rc::Rc, sync::Arc};
 
-use async_channel::{Receiver, Sender, unbounded};
-use core_affinity::CoreId;
 use crate::rt::{System, signals::PanicSource, signals::Signal};
 use crate::util::future::join_all;
 use crate::util::time::{Millis, sleep, timeout};
+use async_channel::{Receiver, Sender, unbounded};
+use core_affinity::CoreId;
 
 use crate::server::server::ServerShared;
 use crate::server::{Server, ServerConfiguration, Worker, WorkerId, WorkerPool, WorkerStatus};

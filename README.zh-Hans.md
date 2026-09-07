@@ -50,6 +50,15 @@ HTTP 协议层在独立仓库 [geario-http](https://github.com/zoujiaqing/geario
 
 同一时间只能启用一个运行时 feature，`build.rs` 会强制检查。
 
+Linux 上的驱动在运行时选择：内核给得出 io_uring 就用它，否则用 polling。
+`neon-polling` 与 `neon-uring` 可以指定其中一个；指定的驱动创建失败会直接
+报错，而不是悄悄换成另一个。在非 Linux 上指定 `neon-uring` 会退回 polling，
+因为那里没有 io_uring 可以满足这个请求。
+
+io_uring 的 ring 会锁定内存，所以创建大量运行时的进程可能耗尽锁定内存额度
+（`RLIMIT_MEMLOCK`），创建 ring 时得到 `ENOMEM`。每个 worker 一个运行时远不
+到这个额度；每个线程一个的测试程序则可能碰到。
+
 ## 环境要求
 
 Rust 1.95 或更高，edition 2024。
