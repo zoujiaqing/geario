@@ -3,8 +3,8 @@ use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
 use std::task::{Context, Poll, ready};
 use std::{future::Future, io, pin::Pin};
 
-use async_channel::Sender;
 use crate::rt::signals::Signal;
+use async_channel::Sender;
 
 use crate::server::manager::ServerCommand;
 

@@ -130,7 +130,10 @@ mod tests {
         let cnt_sht = Rc::new(Cell::new(0));
         let srv = service(Box::new(Srv1(cnt.clone(), cnt_sht.clone())))
             .clone()
-            .and_then(crate::service::boxed::service(Srv2(cnt.clone(), cnt_sht.clone())));
+            .and_then(crate::service::boxed::service(Srv2(
+                cnt.clone(),
+                cnt_sht.clone(),
+            )));
         assert!(format!("{srv:?}").contains("AndThen"));
 
         let srv = srv.into_pipeline();

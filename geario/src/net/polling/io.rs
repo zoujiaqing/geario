@@ -42,7 +42,11 @@ impl Handle for HandleWrapper {
         self.0.write();
     }
 
-    fn write_bufs(&self, _: &IoContext, bufs: &[std::io::IoSlice<'_>]) -> Option<std::io::Result<usize>> {
+    fn write_bufs(
+        &self,
+        _: &IoContext,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> Option<std::io::Result<usize>> {
         self.0.write_bufs(bufs)
     }
 }

@@ -17,8 +17,8 @@ mod message;
 mod repr;
 pub mod utils;
 
-pub use crate::error::bt::{Backtrace, BacktraceRaw, BacktraceResolver};
 pub use self::error::Error;
+pub use crate::error::bt::{Backtrace, BacktraceRaw, BacktraceResolver};
 pub use crate::error::info::ErrorInfo;
 pub use crate::error::message::{ErrorMessage, ErrorMessageChained};
 pub use crate::error::message::{fmt_diag, fmt_diag_string, fmt_diag_typ, fmt_err, fmt_err_string};
@@ -230,7 +230,9 @@ mod tests {
                     "{bt}",
                 );
                 assert!(
-                    bt.repr().unwrap().contains("geario::error::tests::test_error"),
+                    bt.repr()
+                        .unwrap()
+                        .contains("geario::error::tests::test_error"),
                     "{bt}"
                 );
             }

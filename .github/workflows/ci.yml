@@ -1,0 +1,88 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: test geario
+        run: cargo test -p geario --features rustls
+
+      # The poller is forked, and the change lives in its epoll backend, so
+      # its own tests have to run on Linux and not only on the machine that
+      # happens to be handy.
+      - name: test geario-polling
+        run: cargo test -p geario-polling
+
+      - name: test geario-macros
+        run: cargo test -p geario-macros
+
+  drivers:
+    name: driver (${{ matrix.driver }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        driver: [neon-polling, neon-uring]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Linux picks io_uring when it is available and falls back to polling,
+      # so "which one ran" is not obvious from a plain test run. Both are
+      # named here: the two drivers have had different bugs, and the io_uring
+      # one had two that only a real socket under load could find.
+      - name: test with the driver forced
+        run: cargo test -p geario --features "rustls,${{ matrix.driver }}"
+
+  features:
+    name: feature combinations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # A feature that only compiles when another one happens to be on is a
+      # trap for whoever turns it on next. Every combination that a user can
+      # ask for has to build on its own.
+      - name: check
+        run: |
+          set -e
+          for f in "" "trace" "rustls" "rustls-ring" "simd" \
+                   "neon-polling" "neon-uring" "neon-polling,rustls" \
+                   "neon-uring,rustls,trace,simd"; do
+            echo "--- features: ${f:-default} ---"
+            if [ -z "$f" ]; then
+              cargo check -p geario --all-targets
+            else
+              cargo check -p geario --all-targets --features "$f"
+            fi
+          done
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check

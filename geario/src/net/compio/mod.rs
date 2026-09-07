@@ -1,9 +1,9 @@
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as OsUnixStream;
 
-use compio_runtime::Runtime;
 use crate::io::Io;
 use crate::service::cfg::SharedCfg;
+use compio_runtime::Runtime;
 
 mod io;
 

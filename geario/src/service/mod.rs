@@ -38,9 +38,13 @@ mod pl_inner;
 mod pl_state;
 
 pub use crate::service::apply::{apply_fn, apply_fn_factory};
-pub use crate::service::chain::{ServiceChain, ServiceChainFactory, factory, factory_no_st, service};
+pub use crate::service::chain::{
+    ServiceChain, ServiceChainFactory, factory, factory_no_st, service,
+};
 pub use crate::service::ctx::Ctx;
-pub use crate::service::fn_service::{fn_factory, fn_factory_with_config, fn_service, fn_service_st};
+pub use crate::service::fn_service::{
+    fn_factory, fn_factory_with_config, fn_service, fn_service_st,
+};
 pub use crate::service::map_config::{map_config, unit_config};
 pub use crate::service::map_state::map_state;
 pub use crate::service::middleware::{Identity, Middleware, Stack, apply, fn_layer};

@@ -2,8 +2,8 @@ use std::{cell::RefCell, io, os::fd::AsRawFd, os::fd::RawFd, rc::Rc, task::Poll}
 
 use crate::io::Io;
 use crate::rt::Arbiter;
-use crate::syscall;
 use crate::service::cfg::SharedCfg;
+use crate::syscall;
 use slab::Slab;
 use socket2::{SockAddr, Socket};
 

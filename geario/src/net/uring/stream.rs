@@ -2,9 +2,9 @@ use std::{cell::Cell, cmp, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc};
 
 use crate::bytes::{BufMut, BytePage, BytePages, BytesMut};
 use crate::io::{IoContext, IoTaskStatus};
-use ntex_io_uring::{cqueue, opcode, opcode2, types::Fd};
 use crate::rt::Arbiter;
 use crate::util::channel::pool;
+use ntex_io_uring::{cqueue, opcode, opcode2, types::Fd};
 use slab::Slab;
 use socket2::Socket;
 
@@ -148,7 +148,11 @@ impl StreamOps {
             ctx,
             rd_op: None,
             wr_op: None,
-            flags: if zc { self.0.default_flags } else { Flags::NO_ZC },
+            flags: if zc {
+                self.0.default_flags
+            } else {
+                Flags::NO_ZC
+            },
         };
 
         let id = self.0.with(|st| {

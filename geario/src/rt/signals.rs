@@ -1,8 +1,8 @@
 #![allow(static_mut_refs)]
 use std::{cell::RefCell, future::poll_fn, panic, sync::Arc, task::Poll};
 
-use atomic_waker::AtomicWaker;
 use crate::error::Backtrace;
+use atomic_waker::AtomicWaker;
 
 use crate::rt::System;
 

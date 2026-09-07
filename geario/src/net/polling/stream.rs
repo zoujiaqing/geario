@@ -456,7 +456,12 @@ impl StreamItem {
         let mut armed = Flags::empty();
         armed.set(Flags::ARM_RD, event.readable);
         armed.set(Flags::ARM_WR, event.writable);
-        if self.flags.intersection(Flags::ARM_RD | Flags::ARM_WR).bits() == armed.bits() {
+        if self
+            .flags
+            .intersection(Flags::ARM_RD | Flags::ARM_WR)
+            .bits()
+            == armed.bits()
+        {
             return;
         }
         self.flags.remove(Flags::ARM_RD | Flags::ARM_WR);

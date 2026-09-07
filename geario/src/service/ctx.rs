@@ -335,10 +335,10 @@ impl<F: future::Future> future::Future for ReadyCall<'_, F> {
 mod tests {
     use std::{cell::Cell, cell::RefCell, future::poll_fn};
 
-    use crate::util::channel::{condition, oneshot};
     use crate::rt::spawn;
-    use crate::util::time;
+    use crate::util::channel::{condition, oneshot};
     use crate::util::future::{lazy, select};
+    use crate::util::time;
 
     use super::*;
     use crate::service::Pipeline;

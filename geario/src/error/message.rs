@@ -381,7 +381,8 @@ mod tests {
         let msg = fmt_err_string(&err);
         assert_eq!(msg, "InternalServiceError\n");
 
-        let err = crate::error::Error::from(TestError::Disconnect(io::Error::other("Test io error")));
+        let err =
+            crate::error::Error::from(TestError::Disconnect(io::Error::other("Test io error")));
         if let Some(bt) = err.backtrace() {
             bt.resolver().resolve();
         }
