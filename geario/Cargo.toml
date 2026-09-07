@@ -20,6 +20,10 @@ workspace = true
 
 [features]
 default = []
+# The bytes benchmarks use the unstable `test` crate. Declaring them behind
+# a feature keeps `cargo check --all-targets` working on stable, which is
+# what this project pins, without deleting them.
+nightly = []
 trace = []
 no-test-logging = []
 # TLS through rustls. aws-lc-rs is rustls's own default provider.
@@ -103,3 +107,11 @@ serde_test = { workspace = true }
 rcgen = { workspace = true }
 rustls-pemfile = { workspace = true }
 serde_json = { workspace = true }
+
+[[bench]]
+name = "buf"
+required-features = ["nightly"]
+
+[[bench]]
+name = "bytes"
+required-features = ["nightly"]

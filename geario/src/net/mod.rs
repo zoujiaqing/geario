@@ -162,7 +162,11 @@ impl Runner for DefaultRuntime {
                 })
             }
 
-            #[cfg(all(target_os = "linux", feature = "neon-uring"))]
+            #[cfg(all(
+                target_os = "linux",
+                feature = "neon-uring",
+                not(feature = "neon-polling")
+            ))]
             {
                 let driver: Box<dyn Reactor> = Box::new(
                     crate::net::uring::Reactor::new(2048)
@@ -177,7 +181,14 @@ impl Runner for DefaultRuntime {
                 })
             }
 
-            #[cfg(all(not(feature = "neon-uring"), not(feature = "neon-polling")))]
+            // Reached when nothing was asked for, and also when io_uring was
+            // asked for on a platform that has none: the request cannot be
+            // honoured, and the alternative to picking a driver here is a
+            // build that does not compile at all.
+            #[cfg(all(
+                not(feature = "neon-polling"),
+                any(not(feature = "neon-uring"), not(target_os = "linux"))
+            ))]
             {
                 #[cfg(target_os = "linux")]
                 let driver: Box<dyn Reactor> =

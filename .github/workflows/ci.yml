@@ -68,14 +68,32 @@ jobs:
         run: |
           set -e
           for f in "" "trace" "rustls" "rustls-ring" "simd" \
-                   "neon-polling" "neon-uring" "neon-polling,rustls" \
-                   "neon-uring,rustls,trace,simd"; do
+                   "neon-polling" "neon-uring" "neon-polling,neon-uring" \
+                   "neon-polling,rustls" "neon-uring,rustls,trace,simd"; do
             echo "--- features: ${f:-default} ---"
             if [ -z "$f" ]; then
               cargo check -p geario --all-targets
             else
               cargo check -p geario --all-targets --features "$f"
             fi
+          done
+
+  # The feature matrix on Linux cannot see a driver choice that is
+  # unsatisfiable on another platform, and asking for io_uring on macOS is
+  # exactly that.
+  features-macos:
+    name: feature combinations (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: check
+        run: |
+          set -e
+          for f in "rustls" "neon-polling" "neon-uring" "neon-polling,neon-uring"; do
+            echo "--- features: $f ---"
+            cargo check -p geario --all-targets --features "$f"
           done
 
   fmt:

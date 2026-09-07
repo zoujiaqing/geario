@@ -15,6 +15,11 @@ exclude = ["/.*"]
 name = "geario_polling"
 path = "src/lib.rs"
 
+[lints.rust]
+# Upstream sets these from its own test harness to force a backend. They are
+# not ours to declare and not ours to remove.
+unexpected_cfgs = { level = "allow" }
+
 [dependencies]
 cfg-if = "1"
 

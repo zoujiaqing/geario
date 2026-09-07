@@ -3,7 +3,6 @@
 //! every case where taking it would be wrong.
 
 use std::io::IoSlice;
-use std::sync::Arc;
 
 use geario::codec::BytesCodec;
 use geario::service::cfg::SharedCfg;
@@ -88,6 +87,8 @@ async fn declines_when_bytes_are_already_queued() {
 #[cfg(feature = "rustls")]
 #[geario::test]
 async fn declines_behind_a_filter_that_transforms() {
+    use std::sync::Arc;
+
     use geario::tls::rustls::{TlsClientFilter, TlsServerFilter};
     use tls_rustls::pki_types::{PrivateKeyDer, ServerName};
     use tls_rustls::{ClientConfig, RootCertStore, ServerConfig};
