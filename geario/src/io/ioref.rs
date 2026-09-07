@@ -69,7 +69,9 @@ impl IoRef {
     /// For a failure this side detected but still owes the peer a word about,
     /// such as a TLS alert: whatever is already in the write buffer goes out
     /// before the socket closes, and the reason is what `Io::recv` and the
-    /// handshake report instead of a bare disconnect.
+    /// handshake report instead of a bare disconnect. Only the TLS filter
+    /// needs this today.
+    #[cfg(feature = "rustls")]
     pub(crate) fn close_with(&self, err: io::Error) {
         if self.0.error.take().is_none() {
             self.0.error.set(Some(err));
