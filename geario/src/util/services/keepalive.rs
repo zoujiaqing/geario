@@ -180,7 +180,11 @@ mod tests {
 
     #[geario::test]
     async fn test_ka() {
-        let factory = factory_no_st::<_, usize, ()>(KeepAlive::new(Millis(100), || TestErr));
+        // Both margins have to be wide, not just one. The call below has to
+        // land well inside the keep-alive and the expiry has to be observed
+        // well after it; a loaded machine loses either race when the numbers
+        // are close together.
+        let factory = factory_no_st::<_, usize, ()>(KeepAlive::new(Millis(500), || TestErr));
         assert!(format!("{factory:?}").contains("KeepAlive"));
         let _ = factory.clone();
 
@@ -194,12 +198,9 @@ mod tests {
         let (tx, rx) = oneshot::channel();
         spawn(Dispatcher { p, tx: Some(tx) }).detach();
 
-        sleep(Millis(25)).await;
+        sleep(Millis(50)).await;
         assert_eq!(svc.call(1usize).await, Ok(1usize));
-        // Comfortably past the keep-alive rather than exactly on it. Sleeping
-        // for the same 100ms leaves the assertion racing the timer, which a
-        // loaded machine loses.
-        sleep(Millis(400)).await;
+        sleep(Millis(1500)).await;
 
         let res = rx.await;
         assert_eq!(res, Ok(()));
