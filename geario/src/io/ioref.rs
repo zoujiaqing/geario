@@ -64,6 +64,22 @@ impl IoRef {
         self.0.start_shutdown();
     }
 
+    /// Gracefully closes the connection and records why.
+    ///
+    /// For a failure this side detected but still owes the peer a word about,
+    /// such as a TLS alert: whatever is already in the write buffer goes out
+    /// before the socket closes, and the reason is what `Io::recv` and the
+    /// handshake report instead of a bare disconnect.
+    pub(crate) fn close_with(&self, err: io::Error) {
+        if self.0.error.take().is_none() {
+            self.0.error.set(Some(err));
+        } else {
+            // The first reason stands.
+            self.0.error.set(self.0.error.take());
+        }
+        self.0.start_shutdown();
+    }
+
     /// Force-closes the connection.
     ///
     /// The dispatcher does not wait for incomplete responses. The I/O stream is

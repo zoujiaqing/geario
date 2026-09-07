@@ -94,6 +94,26 @@ where
             }
         });
 
+        // A failure rustls found in what the peer sent -- an untrusted
+        // certificate, a name mismatch, no common ALPN protocol -- comes with
+        // a fatal alert queued in the session. Returning the error here would
+        // terminate the connection at once and the alert would never leave,
+        // so the peer would see a bare EOF where it should see the reason.
+        // Write the alert out and close gracefully with the reason attached;
+        // the handshake helper and `Io::recv` report it from there.
+        let result = match result {
+            Err(err)
+                if err
+                    .get_ref()
+                    .is_some_and(|inner| inner.is::<tls_rustls::Error>()) =>
+            {
+                let _ = self.write_tls_records(buf);
+                buf.io().close_with(err);
+                return Ok(());
+            }
+            other => other,
+        };
+
         // flush tls records generated while processing incoming data
         // (e.g. KeyUpdate responses), original error takes priority;
         // during handshake flushing is driven by the handshake helper
@@ -188,9 +208,15 @@ where
         }
 
         if handshaking {
+            // A handshake that fails on this side -- an untrusted issuer, a
+            // name mismatch, a missing ALPN protocol -- is reported by the
+            // filter, which stops the connection and stores the reason. From
+            // here that only looks like the peer going away, so the stored
+            // reason is what gets returned; "disconnected" is the fallback
+            // for when the peer really did go away with nothing said.
             io.read_notify()
                 .await?
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "disconnected"))?;
+                .ok_or_else(|| io.st().error_or_disconnected())?;
         } else {
             return Ok(());
         }

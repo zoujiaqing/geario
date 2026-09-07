@@ -261,7 +261,7 @@ impl<F> Io<F> {
         unsafe { mem::replace(&mut *self.0.get(), IoRef::create_empty()) }
     }
 
-    fn st(&self) -> &IoState {
+    pub(crate) fn st(&self) -> &IoState {
         unsafe { &(*self.0.get()).0 }
     }
 

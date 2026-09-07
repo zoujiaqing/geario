@@ -141,10 +141,77 @@ async fn handshake_rejects_an_untrusted_chain() {
         .await
         .expect("connect");
     let host = ServerName::try_from("localhost").unwrap();
-    let result = TlsClientFilter::create(io, client_cfg, host).await;
+    let err = TlsClientFilter::create(io, client_cfg, host)
+        .await
+        .err()
+        .expect("the handshake accepted a certificate signed by an unrelated CA");
 
+    // The reason has to survive to the caller. A client deciding what to tell
+    // an operator cannot do anything with "disconnected".
+    let rustls_err = err
+        .get_ref()
+        .and_then(|e| e.downcast_ref::<tls_rustls::Error>())
+        .unwrap_or_else(|| panic!("the rustls error was lost on the way out: {err}"));
     assert!(
-        result.is_err(),
-        "the handshake accepted a certificate signed by an unrelated CA"
+        matches!(rustls_err, tls_rustls::Error::InvalidCertificate(_)),
+        "{rustls_err:?}"
+    );
+}
+
+/// A server that has ALPN configured refuses a client with no protocol in
+/// common. The client has to be told that in an alert, not left with an EOF:
+/// "no common protocol" and "the network dropped" are different problems.
+#[geario::test]
+async fn a_client_with_no_common_alpn_protocol_is_told_so() {
+    let _ = tls_rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let pki = issue("localhost");
+
+    let mut server_cfg = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![pki.cert_der.clone()], pki.key_der.clone_key())
+        .expect("server config");
+    server_cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+    let server_cfg = Arc::new(server_cfg);
+
+    let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = lst.local_addr().unwrap();
+    geario::rt::spawn(async move {
+        let accepted = geario::rt::spawn_blocking(move || lst.accept()).await;
+        let Ok(Ok((stream, _))) = accepted else {
+            return;
+        };
+        stream.set_nonblocking(true).ok();
+        let Ok(io) = geario::net::from_tcp_stream(stream, SharedCfg::new("TLS-SRV").into()) else {
+            return;
+        };
+        let _ = TlsServerFilter::create(io, server_cfg, geario::util::time::Millis(5_000)).await;
+    });
+
+    let mut roots = RootCertStore::empty();
+    roots.add(pki.ca_der.clone()).unwrap();
+    let mut client_cfg = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    client_cfg.alpn_protocols = vec![b"h2".to_vec()];
+
+    let io = geario::net::tcp_connect(addr, SharedCfg::new("TLS-CLI").into())
+        .await
+        .expect("connect");
+    let host = ServerName::try_from("localhost").unwrap();
+    let err = TlsClientFilter::create(io, Arc::new(client_cfg), host)
+        .await
+        .err()
+        .expect("the handshake succeeded with no protocol in common");
+
+    let rustls_err = err
+        .get_ref()
+        .and_then(|e| e.downcast_ref::<tls_rustls::Error>())
+        .unwrap_or_else(|| panic!("the alert was lost on the way out: {err}"));
+    assert!(
+        matches!(
+            rustls_err,
+            tls_rustls::Error::AlertReceived(tls_rustls::AlertDescription::NoApplicationProtocol)
+        ),
+        "{rustls_err:?}"
     );
 }
