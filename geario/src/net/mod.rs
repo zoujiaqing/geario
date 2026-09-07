@@ -168,9 +168,13 @@ impl Runner for DefaultRuntime {
                 not(feature = "neon-polling")
             ))]
             {
+                // Asked for by name, so a failure is reported rather than
+                // quietly answered with a different driver. The kernel's
+                // reason is carried out: "cannot construct" on its own sends
+                // whoever hits it looking in the wrong place.
                 let driver: Box<dyn Reactor> = Box::new(
                     crate::net::uring::Reactor::new(2048)
-                        .expect("Cannot construct io-uring reactor"),
+                        .unwrap_or_else(|e| panic!("Cannot construct io-uring reactor: {e}")),
                 );
 
                 with_reactor(&driver, || {
@@ -190,16 +194,18 @@ impl Runner for DefaultRuntime {
                 any(not(feature = "neon-uring"), not(target_os = "linux"))
             ))]
             {
+                // Nothing was asked for: prefer io_uring, fall back quietly.
                 #[cfg(target_os = "linux")]
-                let driver: Box<dyn Reactor> =
-                    if let Ok(reactor) = crate::net::uring::Reactor::new(2048) {
-                        Box::new(reactor)
-                    } else {
+                let driver: Box<dyn Reactor> = match crate::net::uring::Reactor::new(2048) {
+                    Ok(reactor) => Box::new(reactor),
+                    Err(e) => {
+                        log::debug!("No io-uring reactor ({e}), using polling");
                         Box::new(
                             crate::net::polling::Reactor::new()
-                                .expect("Cannot construct io-uring reactor"),
+                                .expect("Cannot construct polling reactor"),
                         )
-                    };
+                    }
+                };
 
                 #[cfg(not(target_os = "linux"))]
                 let driver: Box<dyn Reactor> = Box::new(
