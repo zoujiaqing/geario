@@ -353,10 +353,19 @@ impl BytePages {
 
 impl Drop for BytePages {
     fn drop(&mut self) {
-        CACHE.with(move |c| {
-            let mut cache = c.take().unwrap();
-            if cache.len() < CACHE_SIZE {
-                let mut st = self.st.take().unwrap();
+        // `try_with`, not `with`. A `BytePages` can outlive the cache during
+        // thread teardown, when thread-local destructors run in an order
+        // nothing here controls. Reaching for a destroyed one panics, and a
+        // panic in a destructor aborts the process rather than unwinding.
+        // There is nothing to return the pages to at that point, so let them
+        // be freed with everything else.
+        let _ = CACHE.try_with(move |c| {
+            let Some(mut cache) = c.take() else {
+                return;
+            };
+            if cache.len() < CACHE_SIZE
+                && let Some(mut st) = self.st.take()
+            {
                 st.pages.clear();
                 cache.push(st);
             }

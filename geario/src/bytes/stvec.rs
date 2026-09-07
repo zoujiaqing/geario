@@ -442,8 +442,15 @@ pub(crate) fn release_shared_vec(ptr: *mut SharedVec) {
         // Try to put to cache
         let size = (*ptr).size;
         if size != BytePageSize::Unset {
-            let cached = CACHE.with(|c| {
-                let mut cst = c.take().unwrap();
+            // `try_with`, not `with`. This runs from a destructor, and a
+            // destructor can run during thread teardown after the cache's own
+            // thread-local destructor. Reaching for a destroyed one panics,
+            // and a panic in a destructor aborts the process. With no cache to
+            // return the storage to, it is freed below like any other.
+            let cached = CACHE.try_with(|c| {
+                let Some(mut cst) = c.take() else {
+                    return false;
+                };
                 let res = if cst.cache[size as usize].len() < cst.size {
                     let capacity = cap - METADATA_SIZE_U32;
                     (*ptr).len = 0;
@@ -460,7 +467,7 @@ pub(crate) fn release_shared_vec(ptr: *mut SharedVec) {
                 c.set(Some(cst));
                 res
             });
-            if cached {
+            if cached.unwrap_or(false) {
                 return;
             }
         }

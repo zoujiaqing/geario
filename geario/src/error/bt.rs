@@ -246,12 +246,15 @@ impl Drop for BacktraceResolver {
     fn drop(&mut self) {
         if !self.resolved {
             if let Some(repr) = self.repr.take() {
-                REPRS.with(|r| {
+                // Both caches can already be gone during thread teardown, and
+                // a panic from a destructor aborts the process. Losing a
+                // cached backtrace at that point costs nothing.
+                let _ = REPRS.try_with(|r| {
                     r.borrow_mut().insert(self.bt.id, repr);
                 });
             }
 
-            FRAMES.with(|c| {
+            let _ = FRAMES.try_with(|c| {
                 let mut cache = c.borrow_mut();
 
                 for (ip, frm) in &self.frames {

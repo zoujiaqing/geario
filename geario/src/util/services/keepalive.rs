@@ -196,7 +196,10 @@ mod tests {
 
         sleep(Millis(25)).await;
         assert_eq!(svc.call(1usize).await, Ok(1usize));
-        sleep(Millis(100)).await;
+        // Comfortably past the keep-alive rather than exactly on it. Sleeping
+        // for the same 100ms leaves the assertion racing the timer, which a
+        // loaded machine loses.
+        sleep(Millis(400)).await;
 
         let res = rx.await;
         assert_eq!(res, Ok(()));

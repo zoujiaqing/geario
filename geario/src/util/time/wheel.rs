@@ -132,7 +132,11 @@ impl TimerHandle {
 
 impl Drop for TimerHandle {
     fn drop(&mut self) {
-        TIMER.with(|t| t.with_mod(|inner| inner.remove_timer_bucket(self.0.get(), true)));
+        // A timer can outlive the wheel during thread teardown. There is
+        // nothing to unregister from once the wheel is gone, and panicking
+        // here would abort rather than unwind.
+        let _ =
+            TIMER.try_with(|t| t.with_mod(|inner| inner.remove_timer_bucket(self.0.get(), true)));
     }
 }
 
