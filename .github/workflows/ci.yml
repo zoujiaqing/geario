@@ -53,16 +53,20 @@ jobs:
       # so "which one ran" is not obvious from a plain test run. Both are
       # named here: the two drivers have had different bugs, and the io_uring
       # one had two that only a real socket under load could find.
-      # An io_uring ring pins memory, and the test harness runs one
-      # runtime per thread, so the default locked-memory limit runs out
-      # and the ring cannot be created. A server creates one per worker
-      # and never gets near it; raising the limit is what an io_uring
-      # deployment does anyway.
+      # io_uring creation fails with ENOMEM on these runners often enough
+      # to matter, while the same tests are fine at any thread count on a
+      # real host with the same 8 MB locked-memory limit. Whatever the
+      # runner is short of, it is concurrency dependent, so the harness is
+      # held to two threads here. The environment is printed because the
+      # last time this failed the reason was invisible.
       - name: test with the driver forced
         run: |
-          ulimit -l unlimited 2>/dev/null || ulimit -l 1048576 2>/dev/null || true
-          echo "memlock limit: $(ulimit -l)"
-          cargo test -p geario --features "rustls,${{ matrix.driver }}"
+          sudo prlimit --pid $$ --memlock=unlimited:unlimited 2>/dev/null || true
+          echo "kernel:  $(uname -r)"
+          echo "cpus:    $(nproc)"
+          echo "memlock: $(ulimit -l)"
+          cargo test -p geario --features "rustls,${{ matrix.driver }}" \
+            -- --test-threads=2
 
   features:
     name: feature combinations
