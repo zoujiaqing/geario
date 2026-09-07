@@ -51,6 +51,17 @@ your own `Cargo.toml` — `geario` re-exports both attributes.
 
 Only one runtime feature may be enabled at a time; `build.rs` enforces this.
 
+On Linux the driver is chosen at run time: io_uring when the kernel gives
+one, polling otherwise. `neon-polling` or `neon-uring` names one instead,
+and a named driver that cannot be created is an error rather than a quiet
+substitution. Asking for `neon-uring` off Linux falls back to polling,
+since there is no io_uring there to honour the request with.
+
+An io_uring ring pins memory, so a process that creates many runtimes can
+run out of locked memory (`RLIMIT_MEMLOCK`) and fail to create a ring with
+`ENOMEM`. One runtime per worker is nowhere near the limit; a test harness
+running one per thread can reach it.
+
 ## Requirements
 
 Rust 1.95 or newer, edition 2024.
