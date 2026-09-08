@@ -27,16 +27,36 @@ Every interval is clear of zero, on both kernels, with no bad rounds. At the
 knee geario serves 278k echo requests a second where ntex serves 244k on
 Rocky, and 98k against 82k on Fedora.
 
-## Why
+## Why: measured, not inferred
 
-The win is the poller fork. Upstream `ntex-polling` does four avoidable
-syscalls on every `wait`: it re-arms the eventfd and the timerfd one-shot,
-and sets the timerfd even when the timeout has not changed. `geario-polling`
-registers both level-triggered once, reads the eventfd only when it fired,
-and skips the timerfd when the deadline is unchanged. An echo server wakes
-up once per request, so those saved syscalls are saved per request, which is
-why the lead is largest at small payloads and high request rates and shrinks
-as the payload grows and each wakeup carries more work.
+strace -f -c on both servers under the same load (Rocky, 128 B, 4
+connections). Counts normalized by the client's request total:
+
+| syscall | geario /req | ntex /req |
+| --- | --- | --- |
+| read | 2.000 | 2.001 |
+| write | 2.000 | 2.001 |
+| epoll_pwait | 1.007 | 1.001 |
+| **epoll_ctl** | **0.000** | **3.003** |
+| **timerfd_settime** | **0** | **1.001** |
+| **total** | **5.009** | **9.009** |
+
+The dispatch path is identical: both read twice, write twice, and wait once
+per request. The entire difference is the poller. Upstream `ntex-polling`
+registers one-shot, so every interest delivered has to be re-armed with
+`epoll_ctl` -- the connection fd and the notifier eventfd -- and it resets
+the timerfd on every wait, together three `epoll_ctl` and one
+`timerfd_settime` per request. `geario-polling` registers level-triggered
+once, reads the eventfd only when it fired, and skips the timerfd when the
+deadline has not changed: `epoll_ctl` drops to zero, the timerfd call
+disappears. Nine syscalls per request against five.
+
+This is the attribution, counted directly rather than argued from a forced
+driver choice: the read/write/wait syscalls are equal, so the dispatch and
+buffer paths are doing the same work, and the throughput gap is the four
+syscalls per request the fork removes. It is largest at small payloads and
+high request rates, where wakeups per byte are highest, and shrinks as the
+payload grows.
 
 ## What this is not
 
