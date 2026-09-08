@@ -1,3 +1,6 @@
+> FIXED by vectored send (2026-09-09-uring-vectored-send.md): 16 KB io_uring
+> is now 0.92 of polling and +48% over ntex 4.0. Original diagnosis below.
+>
 > NOTE: this is a geario-internal comparison (io_uring vs polling), NOT
 > geario vs ntex. geario is not slower than ntex: at 16 KB io_uring the
 > two tie, on polling geario is faster. See 2026-09-09-no-regression-vs-ntex.md.

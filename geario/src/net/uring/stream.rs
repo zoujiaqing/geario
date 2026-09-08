@@ -1,6 +1,6 @@
 use std::{cell::Cell, cmp, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc};
 
-use crate::bytes::{BufMut, BytePage, BytePages, BytesMut};
+use crate::bytes::{BufMut, BytePage, BytesMut};
 use crate::io::{IoContext, IoTaskStatus};
 use crate::rt::Arbiter;
 use crate::util::channel::pool;
@@ -59,6 +59,13 @@ fn zc_size() -> u32 {
 }
 const IORING_RECVSEND_POLL_FIRST: u16 = 1;
 
+/// Most pages gathered into one vectored send, and the byte ceiling for it.
+/// Mirrors the polling driver: one `writev` covers a whole response instead
+/// of one `send` per page, which is what let a multi-page response serialize
+/// into several round-trips on io_uring.
+const MAX_WRITE_ITEMS: usize = 16;
+const MAX_WRITE_SIZE: usize = 64 * 1024;
+
 #[derive(Debug)]
 struct StreamItem {
     io: Socket,
@@ -78,6 +85,14 @@ enum Operation {
         id: usize,
         buf: BytePage,
         result: Option<io::Result<usize>>,
+    },
+    /// A vectored send of several queued pages in one submission. `iovecs`
+    /// points into `pages`, so both are held here until the completion; the
+    /// pages own heap buffers, so moving this `Vec` does not move them.
+    Writev {
+        id: usize,
+        pages: Vec<BytePage>,
+        iovecs: Vec<libc::iovec>,
     },
     Poll {
         id: usize,
@@ -243,6 +258,29 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
+                Operation::Writev {
+                    id,
+                    pages,
+                    iovecs: _,
+                } => {
+                    if let Some(item) = st.streams.get_mut(id) {
+                        item.ctx.with_write_buf(|wrt| {
+                            for page in pages.into_iter().rev() {
+                                if !page.is_empty() {
+                                    wrt.prepend(page);
+                                }
+                            }
+                        });
+                        item.wr_op.take();
+                        item.flags.remove(Flags::WR_CANCELING);
+
+                        let res = item.ctx.update_write_status(Ok(false));
+                        if item.flags.contains(Flags::WR_REISSUE) || res == IoTaskStatus::Io {
+                            item.flags.remove(Flags::WR_REISSUE);
+                            st.send(id, &self.inner.api);
+                        }
+                    }
+                }
                 Operation::Nop
                 | Operation::Poll { .. }
                 | Operation::Close { .. }
@@ -359,6 +397,44 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
+                Operation::Writev { id, mut pages, iovecs: _ } => {
+                    if let Some(item) = st.streams.get_mut(id) {
+                        item.wr_op.take();
+
+                        // Advance the pages by however many bytes went out and
+                        // put the rest back at the front of the write buffer,
+                        // exactly as the polling driver does after a short
+                        // writev.
+                        if let Ok(written) = res {
+                            let mut left = written;
+                            for page in pages.iter_mut() {
+                                let n = cmp::min(page.len(), left);
+                                page.advance_to(n);
+                                left -= n;
+                                if left == 0 {
+                                    break;
+                                }
+                            }
+                        }
+                        item.ctx.with_write_buf(|wrt| {
+                            for page in pages.into_iter().rev() {
+                                if !page.is_empty() {
+                                    wrt.prepend(page);
+                                }
+                            }
+                        });
+
+                        let res = res.map(|n| {
+                            if n == 0 {
+                                item.ctx.stop(None);
+                            }
+                            n > 0
+                        });
+                        if item.ctx.update_write_status(res) == IoTaskStatus::Io {
+                            st.send(id, &self.inner.api);
+                        }
+                    }
+                }
                 Operation::Poll { id } => {
                     if let Some(item) = st.streams.get_mut(id)
                         && !item.flags.contains(Flags::RD_MORE) && !item.ctx.is_stopped() {
@@ -466,38 +542,86 @@ impl StreamOpsStorage {
     }
 
     fn send(&mut self, id: usize, api: &ReactorApi) {
-        if let Some(item) = self.streams.get_mut(id) {
-            if item.wr_op.is_none() {
-                let page = item.ctx.with_write_buf(BytePages::take);
-                if let Some(buf) = page {
-                    #[cfg(feature = "trace")]
-                    log::trace!("{}: Snd({id}) size:{:?}", item.ctx.tag(), buf.len());
-
-                    let op_id = self.ops.insert(Some(Operation::Send {
-                        id,
-                        buf,
-                        result: None,
-                    })) as u32;
-                    item.wr_op = NonZeroU32::new(op_id);
-
-                    let (buf_ptr, buf_len) =
-                        if let Some(Operation::Send { buf, .. }) = &self.ops[op_id as usize] {
-                            // Safety. `buf` is stored in `self.ops` which is heap.
-                            (unsafe { buf.as_ptr() }, buf.len() as u32)
-                        } else {
-                            unreachable!()
-                        };
-
-                    api.submit_inline(op_id, move |entry| {
-                        if item.flags.contains(Flags::NO_ZC) || buf_len <= zc_size() {
-                            opcode2::Send::with(entry, item.fd()).buffer(buf_ptr, buf_len);
-                        } else {
-                            opcode2::SendZc::with(entry, item.fd()).buffer(buf_ptr, buf_len);
-                        }
-                    });
-                }
-            } else if item.flags.contains(Flags::WR_CANCELING) {
+        let Some(item) = self.streams.get_mut(id) else {
+            return;
+        };
+        if item.wr_op.is_some() {
+            if item.flags.contains(Flags::WR_CANCELING) {
                 item.flags.insert(Flags::WR_REISSUE);
+            }
+            return;
+        }
+
+        // Gather queued pages, up to the item and byte ceilings.
+        let mut pages: Vec<BytePage> = item.ctx.with_write_buf(|wrt| {
+            let mut pages = Vec::new();
+            let mut size = 0;
+            while let Some(page) = wrt.take() {
+                size += page.len();
+                pages.push(page);
+                if pages.len() == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
+                    break;
+                }
+            }
+            pages
+        });
+
+        match pages.len() {
+            0 => {}
+            1 => {
+                // Single page keeps the existing send / zero-copy choice.
+                let buf = pages.pop().unwrap();
+                #[cfg(feature = "trace")]
+                log::trace!("{}: Snd({id}) size:{:?}", item.ctx.tag(), buf.len());
+                let op_id = self.ops.insert(Some(Operation::Send {
+                    id,
+                    buf,
+                    result: None,
+                })) as u32;
+                item.wr_op = NonZeroU32::new(op_id);
+                let (buf_ptr, buf_len) =
+                    if let Some(Operation::Send { buf, .. }) = &self.ops[op_id as usize] {
+                        // Safety: `buf` is stored in `self.ops`, which is heap.
+                        (unsafe { buf.as_ptr() }, buf.len() as u32)
+                    } else {
+                        unreachable!()
+                    };
+                api.submit_inline(op_id, move |entry| {
+                    if item.flags.contains(Flags::NO_ZC) || buf_len <= zc_size() {
+                        opcode2::Send::with(entry, item.fd()).buffer(buf_ptr, buf_len);
+                    } else {
+                        opcode2::SendZc::with(entry, item.fd()).buffer(buf_ptr, buf_len);
+                    }
+                });
+            }
+            n => {
+                // Several pages go out in one vectored send. Plain writev, not
+                // zero-copy: SendZc is single-buffer and does not pay at these
+                // sizes anyway.
+                let _ = n;
+                #[cfg(feature = "trace")]
+                log::trace!("{}: SndV({id}) pages:{n}");
+                let iovecs: Vec<libc::iovec> = pages
+                    .iter()
+                    .map(|p| libc::iovec {
+                        // Safety: the page owns its buffer for the op's life.
+                        iov_base: unsafe { p.as_ptr() } as *mut libc::c_void,
+                        iov_len: p.len(),
+                    })
+                    .collect();
+                let fd = item.fd();
+                let op_id = self
+                    .ops
+                    .insert(Some(Operation::Writev { id, pages, iovecs }))
+                    as u32;
+                item.wr_op = NonZeroU32::new(op_id);
+                let (iov_ptr, iov_len) =
+                    if let Some(Operation::Writev { iovecs, .. }) = &self.ops[op_id as usize] {
+                        (iovecs.as_ptr(), iovecs.len() as u32)
+                    } else {
+                        unreachable!()
+                    };
+                api.submit(op_id, opcode::Writev::new(fd, iov_ptr, iov_len).build());
             }
         }
     }
