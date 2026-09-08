@@ -1,3 +1,8 @@
+> NOTE: this is a geario-internal comparison (io_uring vs polling), NOT
+> geario vs ntex. geario is not slower than ntex: at 16 KB io_uring the
+> two tie, on polling geario is faster. See 2026-09-09-no-regression-vs-ntex.md.
+> The io_uring-vs-polling gap is inherited ntex behaviour.
+
 # Why io_uring is slower than polling for medium responses
 
 - Date: 2026-09-09
