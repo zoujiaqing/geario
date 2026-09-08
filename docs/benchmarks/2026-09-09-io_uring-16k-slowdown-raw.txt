@@ -1,0 +1,13 @@
+# body sweep, same commit, only driver (conns=4, workers=4):
+# sha256 srv-geario-h1     6a4403c90bdaf6440053016563bbaec2b5a43e2720517e39ca8c8cd972494a57
+# sha256 srv-geario-uring  b03737133920422ac82d616bce03998acc31ae3c7bd0f91926ce21577bc11703
+# body   polling   io_uring  ratio
+# 1KB    225981    210696    0.93
+# 4KB    197336    194717    0.99
+# 8KB    199831    171618    0.86
+# 16KB   182173    111516    0.61
+# 32KB   143653     95935    0.67
+# 64KB    92702     69064    0.75
+#
+# 16KB toggle (conns=4): polling 183771 | uring pg64 153593 | uring pg64+nozc 171724
+# 32KB toggle (conns=4): polling 144618 | uring pg64 122678 | uring pg64+nozc 138013

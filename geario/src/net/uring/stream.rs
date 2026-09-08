@@ -43,7 +43,20 @@ bitflags::bitflags! {
     }
 }
 
-const ZC_SIZE: u32 = 1536;
+/// Zero-copy send (`SendZc`) is used only above this many bytes; at or below,
+/// a plain `Send` (one copy) is cheaper than pinning pages plus the extra
+/// completion `SendZc` costs. Overridable via `GEARIO_URING_ZC_SIZE` so the
+/// threshold can be measured; `u32::MAX` disables zero-copy entirely.
+fn zc_size() -> u32 {
+    use std::sync::OnceLock;
+    static ZC: OnceLock<u32> = OnceLock::new();
+    *ZC.get_or_init(|| {
+        std::env::var("GEARIO_URING_ZC_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1536)
+    })
+}
 const IORING_RECVSEND_POLL_FIRST: u16 = 1;
 
 #[derive(Debug)]
@@ -476,7 +489,7 @@ impl StreamOpsStorage {
                         };
 
                     api.submit_inline(op_id, move |entry| {
-                        if item.flags.contains(Flags::NO_ZC) || buf_len <= ZC_SIZE {
+                        if item.flags.contains(Flags::NO_ZC) || buf_len <= zc_size() {
                             opcode2::Send::with(entry, item.fd()).buffer(buf_ptr, buf_len);
                         } else {
                             opcode2::SendZc::with(entry, item.fd()).buffer(buf_ptr, buf_len);
