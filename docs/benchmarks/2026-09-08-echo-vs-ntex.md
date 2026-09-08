@@ -58,10 +58,33 @@ syscalls per request the fork removes. It is largest at small payloads and
 high request rates, where wakeups per byte are highest, and shrinks as the
 payload grows.
 
+## io_uring: even
+
+The same comparison with both servers on their default driver, which on
+Fedora is io_uring for both (confirmed by strace: `io_uring_enter` present).
+All workers, twelve paired rounds:
+
+| payload | conns | geario vs ntex (io_uring) |
+| --- | --- | --- |
+| 128 B | 2 | -0.01% [-0.83%, +0.81%] |
+| 128 B | 8 | -0.27% [-0.76%, +0.19%] |
+| 1 KB | 8 | +0.24% [-0.07%, +0.57%] |
+
+Dead even, every interval across zero. This is expected and it bounds the
+claim: the io_uring driver does not use the epoll backend, so the poller
+fork saves nothing there. geario's lead over ntex is real on the polling
+driver -- kqueue on macOS, epoll on Linux, anywhere io_uring is off or
+unavailable -- and absent on io_uring, where the two are the same speed.
+
+## Where this leaves it
+
+- **Polling: geario wins**, 10-19% at the knee, counted down to the four
+  syscalls per request the fork removes, on two kernels and all workers.
+- **io_uring: geario ties ntex.** To lead on the default Linux path the win
+  has to come from the dispatch or buffer path, which the syscall counts
+  show is currently identical work on both. That is the next target.
+
 ## What this is not
 
-Polling only; io_uring is not measured here. One echo service, two small
-payloads, at the knee on two KVM guests. It says geario's IO and dispatch
-path is faster than ntex's on this workload because it spends fewer syscalls
-per wakeup. It does not measure many workers, real protocols, or the
-io_uring driver.
+Two payloads at the knee on two KVM guests, echo only. It does not measure
+real protocols; geario-http against ntex is a separate exercise.
