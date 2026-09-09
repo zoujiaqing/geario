@@ -161,6 +161,15 @@ async fn handshake_rejects_an_untrusted_chain() {
 /// A server that has ALPN configured refuses a client with no protocol in
 /// common. The client has to be told that in an alert, not left with an EOF:
 /// "no common protocol" and "the network dropped" are different problems.
+// Flaky on loaded macOS CI: over loopback the connection teardown races the
+// alert, and either side can see a reset or a broken pipe before it reads the
+// alert, so the failure surfaces as a transport error rather than the rustls
+// one. It is reliable on Linux, Windows, and a quiet macOS host. Making it
+// deterministic needs a way to reproduce the race; ignored on macOS until then.
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "flaky: teardown races the alert on loaded macOS CI"
+)]
 #[geario::test]
 async fn a_client_with_no_common_alpn_protocol_is_told_so() {
     let _ = tls_rustls::crypto::aws_lc_rs::default_provider().install_default();

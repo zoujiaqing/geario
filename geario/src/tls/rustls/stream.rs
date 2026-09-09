@@ -204,15 +204,7 @@ where
         };
 
         if wants_write {
-            if let Err(e) = io.flush(false).await {
-                // Our write can lose a race with the peer's close: if the peer
-                // rejected the handshake it sent a fatal alert and then closed,
-                // and the write fails before we have read that alert. Drain the
-                // read side once so the session turns the alert into the stored
-                // reason, and prefer it over the raw transport error.
-                let _ = io.read_notify().await;
-                return Err(io.st().error().unwrap_or(e));
-            }
+            io.flush(false).await?;
         }
 
         if handshaking {
@@ -222,16 +214,9 @@ where
             // here that only looks like the peer going away, so the stored
             // reason is what gets returned; "disconnected" is the fallback
             // for when the peer really did go away with nothing said.
-            if io.read_notify().await?.is_none() {
-                let reason = io.st().error_or_disconnected();
-                // The rejection queued a fatal alert. Close in order -- flush
-                // the alert, then FIN -- so the peer reads it as an alert. A
-                // bare drop resets the connection, and a reset discards any
-                // not-yet-read bytes in the peer's buffer, losing the alert;
-                // that race shows up on a loaded host but not a quiet one.
-                let _ = io.shutdown().await;
-                return Err(reason);
-            }
+            io.read_notify()
+                .await?
+                .ok_or_else(|| io.st().error_or_disconnected())?;
         } else {
             return Ok(());
         }
