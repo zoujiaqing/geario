@@ -124,18 +124,27 @@ geario 单包约 43,328 行。按目录:
 
 ### 5.1 删除资格(所有删除类任务的统一门)
 
-零引用只是**候选筛选**。候选进入删除,须逐条排除:
+**决策(2026-09-10,用户确认):geario 是为 geario-http 而 fork 的底座、非对外发布的库,
+公开 API 面收缩到 geario-http + ffi 实际消费范围。** 未被消费者用到的 pub API 可删,
+但删除仍属"缩小公开面",逐项立项、逐项验证、单独提交。
+
+零引用只是**候选筛选**;grep 计数会因排除模式不同而误导(见下)。**终极门是编译器 +
+测试套件**:删除后 `geario`(all-targets,各 feature 组合)+ `geario-http`(full,rustls,
+hyper-full)+ `geario-http-ffi` 必须全部编过 + 测试通过 + 基准无回退。候选还须逐条排除:
 
 1. **跨 crate 引用**:`geario` + `geario-http` + `geario-http-ffi` 三处无非测试引用。
-2. **公开导出**:不是 `pub` 对外承诺的 API 面(是则单独立项处理,不进第一批)。
+2. **消费者未用**:geario-http + ffi 均不消费(现按决策可删;若消费则载重,保留)。
 3. **trait 实现**:不是某个被用到的 trait 的 impl(impl 可能通过 trait 对象间接可达)。
 4. **宏生成**:不是宏展开产物、也不被宏引用。
-5. **平台 / feature 分支**:不是某平台或 feature 组合下才激活的代码
-   (`cfg(windows)`、`cfg(feature=...)` 等)。
+5. **平台 / feature 分支**:平台代码(`cfg(windows)` 等)与 pub feature(tokio/compio)
+   单独立项;不与内部删除混批。
 6. **示例 / 外部 ABI 承诺**:不被 examples、ffi C 头、或对外 ABI 依赖。
 
-**第一批只删满足全部 6 条、且"非公开、确实不可达"的内部代码;公开 API 与平台分支
-一律单独立项、单独提交。**
+**阶段一子代理的死代码清单不可靠,必须逐项用上述门 + 编译器复核。** 已证伪的误判:
+STEXT(`From<Arc<str>>` 活用 + pub trait impl)、`pl_factory::PipelineFactory`
+(geario-http `HttpPipeline` 核心类型)、`channel::{bstream,inplace,mpsc}`(geario-http 用)、
+`map_init_err`(geario-http `service.rs` 用)、`state.rs::RequestState`(16 处引用)——
+全部载重,不可删。
 
 ### 5.2 第 1 层:纯死代码删除(低风险)
 
