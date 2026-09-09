@@ -65,7 +65,6 @@ pub use crate::bytes::buf::{Buf, BufMut};
 mod bvec;
 mod bytes;
 mod debug;
-mod hex;
 mod pages;
 mod serde;
 mod storage;
