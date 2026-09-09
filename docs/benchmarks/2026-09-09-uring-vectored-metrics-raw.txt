@@ -1,0 +1,10 @@
+# 16KB io_uring, conns=4 workers=4 secs=10, hz=100; CPU = (utime+stime)/proc, all threads
+# sha256 srv-geario-uring   15430dc805200f1baf4c915add5f0a2a67cd63498c8905cf04d9de7bbb4f72b6
+# sha256 server-ntex4-uring acc0dbdd7850723e2139fb4c7656afb1b1828ab7b77d2f4358643aa86f60904a
+# sha256 client            2331f053e46aa5a4d6e07296c9b50af1190c006c0a104b0cf9a479525ea44dd6
+geario r1  qps=163700 p99us=52.9 cpu_us/req=13.0 rss_kb=4312 bad=0
+ntex4  r1  qps=93971  p99us=88.8 cpu_us/req=21.5 rss_kb=4416 bad=1   # warmup blip
+geario r2  qps=163690 p99us=51.2 cpu_us/req=12.9 rss_kb=4348 bad=0
+ntex4  r2  qps=119263 p99us=63.4 cpu_us/req=18.1 rss_kb=4456 bad=0
+geario r3  qps=172562 p99us=48.8 cpu_us/req=12.2 rss_kb=4324 bad=0
+ntex4  r3  qps=117428 p99us=65.3 cpu_us/req=18.4 rss_kb=4460 bad=0

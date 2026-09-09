@@ -64,6 +64,23 @@ earlier io_uring data-loss bugs) and geario core 249. macOS (kqueue) 373.
 The partial-write path is the same shape the polling driver has used
 throughout.
 
+## Resource cost, same window (16 KB io_uring, 4 workers, 10 s x 3)
+
+Server CPU is utime+stime from /proc/pid/stat, all worker threads; p99 from
+the client; RSS is VmRSS at end of window.
+
+| metric | geario | ntex 4.0 |
+| --- | --- | --- |
+| qps | ~166k | ~110k |
+| p99 | ~51 us | ~72 us |
+| CPU per request | ~12.7 us | ~19.3 us |
+| RSS | ~4.3 MB | ~4.4 MB |
+| errors | 0 | 0 (one warmup blip in round 1) |
+
+geario serves more, at lower tail latency, for about a third less CPU per
+request, at the same memory. The CPU-per-request drop tracks the throughput
+lead, which is what fewer, larger submissions should produce.
+
 ## Not yet
 
 - 8 KB and below is one page, so it takes the single-page Send/SendZc path,
