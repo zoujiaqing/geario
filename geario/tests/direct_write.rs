@@ -64,8 +64,19 @@ async fn writes_straight_to_the_socket_without_buffering() {
         io.flush(true).await.expect("flush");
     }
 
-    let echoed = io.recv(&BytesCodec).await.expect("recv").expect("no data");
-    assert_eq!(&echoed[..], b"one two");
+    // The echo can come back in more than one segment, so accumulate to the
+    // full length instead of trusting a single recv, and bound the wait so a
+    // stall fails the test rather than hanging it.
+    let mut got = Vec::new();
+    geario::util::time::timeout(geario::util::time::Millis(5_000), async {
+        while got.len() < 7 {
+            let item = io.recv(&BytesCodec).await.expect("recv").expect("no data");
+            got.extend_from_slice(&item);
+        }
+    })
+    .await
+    .expect("echo timed out");
+    assert_eq!(&got[..], b"one two");
 }
 
 /// Bytes already queued must go out first. Writing straight to the socket
@@ -92,10 +103,14 @@ async fn declines_when_bytes_are_already_queued() {
     io.flush(true).await.expect("flush");
 
     let mut got = Vec::new();
-    while got.len() < 11 {
-        let item = io.recv(&BytesCodec).await.expect("recv").expect("no data");
-        got.extend_from_slice(&item);
-    }
+    geario::util::time::timeout(geario::util::time::Millis(5_000), async {
+        while got.len() < 11 {
+            let item = io.recv(&BytesCodec).await.expect("recv").expect("no data");
+            got.extend_from_slice(&item);
+        }
+    })
+    .await
+    .expect("echo timed out");
     assert_eq!(&got[..], b"firstsecond");
 }
 
