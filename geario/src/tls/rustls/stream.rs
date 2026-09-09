@@ -214,9 +214,16 @@ where
             // here that only looks like the peer going away, so the stored
             // reason is what gets returned; "disconnected" is the fallback
             // for when the peer really did go away with nothing said.
-            io.read_notify()
-                .await?
-                .ok_or_else(|| io.st().error_or_disconnected())?;
+            if io.read_notify().await?.is_none() {
+                let reason = io.st().error_or_disconnected();
+                // The rejection queued a fatal alert. Close in order -- flush
+                // the alert, then FIN -- so the peer reads it as an alert. A
+                // bare drop resets the connection, and a reset discards any
+                // not-yet-read bytes in the peer's buffer, losing the alert;
+                // that race shows up on a loaded host but not a quiet one.
+                let _ = io.shutdown().await;
+                return Err(reason);
+            }
         } else {
             return Ok(());
         }
