@@ -59,6 +59,22 @@ fn zc_size() -> u32 {
 }
 const IORING_RECVSEND_POLL_FIRST: u16 = 1;
 
+/// How many pages a single vectored send may gather. Overridable via
+/// `GEARIO_URING_MAX_WRITE_ITEMS` for attribution measurements: setting it to
+/// 1 forces one page per submission (the pre-vectored behaviour), which
+/// isolates the batching gain from the rest.
+fn max_write_items() -> usize {
+    use std::sync::OnceLock;
+    static N: OnceLock<usize> = OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("GEARIO_URING_MAX_WRITE_ITEMS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&n| n >= 1)
+            .unwrap_or(MAX_WRITE_ITEMS)
+    })
+}
+
 /// Most pages gathered into one vectored send, and the byte ceiling for it.
 /// Mirrors the polling driver: one `writev` covers a whole response instead
 /// of one `send` per page, which is what let a multi-page response serialize
@@ -562,7 +578,7 @@ impl StreamOpsStorage {
             };
             let mut rest: Vec<BytePage> = Vec::new();
             let mut size = first.len();
-            while size < MAX_WRITE_SIZE && rest.len() + 1 < MAX_WRITE_ITEMS {
+            while size < MAX_WRITE_SIZE && rest.len() + 1 < max_write_items() {
                 match wrt.take() {
                     Some(page) => {
                         size += page.len();

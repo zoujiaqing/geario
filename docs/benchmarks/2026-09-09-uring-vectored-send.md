@@ -35,6 +35,24 @@ ntex 4.0 still sends one page per SQE, so geario now leads it by a third to a
 half on 16-64 KB responses over io_uring, and ties below one page. This is
 the lead on the default Linux path that io_uring parity previously lacked.
 
+## Attribution: batching vs dropping SendZc
+
+The vectored change does two things at once -- merges several submissions
+into one, and stops using SendZc for the multi-page case -- so the lead is
+not all from batching. Isolated on the same binary at 16 KB io_uring, one
+factor at a time (via `GEARIO_URING_MAX_WRITE_ITEMS` and
+`GEARIO_URING_ZC_SIZE`):
+
+| configuration | qps | step |
+| --- | --- | --- |
+| per-page SendZc (the original behaviour) | 112,654 | baseline |
+| per-page plain (SendZc off, still one page per SQE) | 134,026 | dropping SendZc: **+19%** |
+| vectored Writev (one submission, plain) | 173,798 | batching on top: **+30%** |
+
+Combined, +54% over the original per-page-SendZc path, which is what ntex 4.0
+still does. Batching is the larger share but not the whole; dropping SendZc
+is a real, separable part of it.
+
 ## Correctness
 
 Full suites pass on Rocky with the io_uring driver: geario-http 168 tests
