@@ -27,7 +27,6 @@ mod map_err;
 mod map_init_err;
 mod middleware;
 pub mod state;
-mod then;
 mod util;
 
 pub mod pipeline;
@@ -450,5 +449,4 @@ pub mod dev {
     pub use crate::service::map_err::{MapErr, MapErrFactory};
     pub use crate::service::map_init_err::MapInitErr;
     pub use crate::service::middleware::{ApplyMiddleware, FnMiddleware};
-    pub use crate::service::then::{Then, ThenFactory};
 }

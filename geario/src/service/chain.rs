@@ -10,7 +10,6 @@ use crate::service::map_err::{MapErr, MapErrFactory};
 use crate::service::map_init_err::MapInitErr;
 use crate::service::middleware::{ApplyMiddleware, Middleware};
 use crate::service::pipeline::Pipeline;
-use crate::service::then::{Then, ThenFactory};
 use crate::service::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 /// Constructs new chain with one service.
@@ -91,20 +90,6 @@ impl<S: Service<St, Req>, St, Req> ServiceChain<S, St, Req> {
     {
         ServiceChain {
             service: AndThen::new(self.service, service.into_service()),
-            st: PhantomData,
-        }
-    }
-
-    /// Chain on a computation for when a call to the service finished,
-    /// passing the result of the call to the next service `U`.
-    pub fn then<Next, F>(self, service: F) -> ServiceChain<Then<S, Next>, St, Req>
-    where
-        Self: Sized,
-        F: IntoService<Next, St, Result<S::Res, S::Error>>,
-        Next: Service<St, Result<S::Res, S::Error>>,
-    {
-        ServiceChain {
-            service: Then::new(self.service, service.into_service()),
             st: PhantomData,
         }
     }
@@ -267,30 +252,6 @@ impl<Sf: ServiceFactory<St, Req, Cfg>, St, Req, Cfg> ServiceChainFactory<Sf, St,
         Err: From<Sf::Error>,
     {
         crate::service::apply_fn_factory(self.factory, f)
-    }
-
-    /// Create chain factory to chain on a computation for when a call to the
-    /// service finished, passing the result of the call to the next
-    /// service `U`.
-    ///
-    /// Note that this function consumes the receiving factory and returns a
-    /// wrapped version of it.
-    pub fn then<F, U>(self, factory: F) -> ServiceChainFactory<ThenFactory<Sf, U>, St, Req, Cfg>
-    where
-        Self: Sized,
-        F: IntoServiceFactory<U, St, Result<Sf::Res, Sf::Error>, Cfg>,
-        U: ServiceFactory<
-                St,
-                Result<Sf::Res, Sf::Error>,
-                Cfg,
-                Error = Sf::Error,
-                InitError = Sf::InitError,
-            >,
-    {
-        ServiceChainFactory {
-            factory: ThenFactory::new(self.factory, factory.into_factory()),
-            _t: PhantomData,
-        }
     }
 
     /// Map this service's output to a different type, returning a new service
