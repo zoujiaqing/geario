@@ -283,32 +283,6 @@ impl SystemRunner {
             fut.await
         })
     }
-
-    #[cfg(feature = "tokio")]
-    /// Execute a future and wait for result.
-    pub async fn run_local<F, R>(self, fut: F) -> R
-    where
-        F: Future<Output = R> + 'static,
-        R: 'static,
-    {
-        let SystemRunner { config, .. } = self;
-
-        // run loop
-        let result = tok_io::task::LocalSet::new()
-            .run_until(async move {
-                _ = System::start(config);
-
-                let loc = current_location();
-                crate::error::set_backtrace_start(loc.file(), loc.line() + 2);
-                fut.await
-            })
-            .await;
-
-        unsafe {
-            crate::rt::remove_all_items();
-        }
-        result
-    }
 }
 
 #[track_caller]

@@ -30,12 +30,6 @@ pub mod iocp;
 #[cfg(any(unix, windows))]
 mod helpers;
 
-#[cfg(feature = "tokio")]
-pub mod tokio;
-
-#[cfg(feature = "compio")]
-pub mod compio;
-
 #[allow(clippy::wrong_self_convention)]
 pub trait Reactor: Driver {
     fn tcp_connect(&self, addr: net::SocketAddr, cfg: SharedCfg) -> channel::Receiver<Io>;
@@ -117,23 +111,7 @@ pub struct DefaultRuntime;
 impl Runner for DefaultRuntime {
     #[allow(unused_variables, clippy::too_many_lines)]
     fn block_on(&self, fut: BlockFuture) -> Result<(), Box<dyn Any + Send>> {
-        #[cfg(feature = "tokio")]
-        {
-            let driver: Box<dyn Reactor> = Box::new(self::tokio::Reactor);
-
-            with_reactor(&driver, || crate::net::tokio::block_on(fut));
-            Ok(())
-        }
-
-        #[cfg(all(feature = "compio", not(feature = "tokio")))]
-        {
-            let driver: Box<dyn Reactor> = Box::new(self::compio::Reactor);
-
-            with_reactor(&driver, || crate::net::compio::block_on(fut));
-            Ok(())
-        }
-
-        #[cfg(all(windows, not(feature = "tokio"), not(feature = "compio")))]
+        #[cfg(windows)]
         {
             let driver: Box<dyn Reactor> =
                 Box::new(crate::net::iocp::Reactor::new().expect("Cannot construct driver"));
@@ -146,7 +124,7 @@ impl Runner for DefaultRuntime {
             })
         }
 
-        #[cfg(all(unix, not(feature = "tokio"), not(feature = "compio")))]
+        #[cfg(unix)]
         {
             #[cfg(feature = "neon-polling")]
             {

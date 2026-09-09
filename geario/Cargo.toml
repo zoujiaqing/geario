@@ -32,8 +32,6 @@ rustls-ring = ["tls_rustls", "tls_rustls/std", "tls_rustls/ring"]
 neon-polling = []
 neon-uring = []
 neon-iocp = []
-tokio = ["tok-io"]
-compio = ["compio-net", "compio-driver", "compio-runtime", "compio-buf", "compio-io"]
 simd = ["simdutf8"]
 overuse = []
 
@@ -50,9 +48,6 @@ http = { workspace = true }
 tls_rustls = { workspace = true, optional = true }
 geario-polling = { workspace = true }
 socket2 = { workspace = true, features = ["all"] }
-compio-buf = { workspace = true, optional = true }
-compio-io = { workspace = true, optional = true }
-compio-net = { workspace = true, optional = true }
 env_logger = { workspace = true }
 futures-core = { workspace = true }
 hashbrown = { workspace = true, features = ["serde"] }
@@ -69,9 +64,6 @@ oneshot = { workspace = true }
 parking_lot = { workspace = true }
 scoped-tls = { workspace = true }
 swap-buffer-queue = { workspace = true }
-compio-driver = { workspace = true, optional = true }
-compio-runtime = { workspace = true, optional = true }
-tok-io = { workspace = true, features = ["rt", "net"], optional = true }
 log = { workspace = true }
 slab = { workspace = true }
 serde = { workspace = true }

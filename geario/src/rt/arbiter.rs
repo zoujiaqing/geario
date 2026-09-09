@@ -194,13 +194,6 @@ impl Arbiter {
         sender: Sender<ArbiterCommand>,
         on_stop: OnCloseStorage,
     ) -> Self {
-        #[cfg(feature = "tokio")]
-        let hnd = { Handle::new(sender.clone()) };
-
-        #[cfg(feature = "compio")]
-        let hnd = { Handle::new(sender.clone()) };
-
-        #[cfg(all(not(feature = "compio"), not(feature = "tokio")))]
         let hnd = { Handle::current() };
 
         Self(Arc::new(ArbiterInner {

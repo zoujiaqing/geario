@@ -64,15 +64,9 @@ socket2 = "0.6.1"
 swap-buffer-queue = "0.2.1"
 syn = "3.0"
 thiserror = "2"
-tok-io = { version = "1", package = "tokio", default-features = false }
 uuid = { version = "1.19", features = ["v7"] }
 windows-sys = "0.61.0"
 
-compio-buf = "0.8.0"
-compio-io = "0.9.0"
-compio-net = "0.11.0"
-compio-driver = "0.11.1"
-compio-runtime = "0.11.0"
 
 criterion = "0.5"
 derive_more = "2.0.1"

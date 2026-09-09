@@ -335,7 +335,6 @@ thread_local! {
         let mut paths = Vec::new();
         for item in [
             &["src", "driver.rs"][..],
-            &["src", "rt_compio.rs"][..],
             &["core", "src", "panic", "unwind_safe.rs"][..],
             &["src", "runtime", "task", "core.rs"][..]
         ] {
