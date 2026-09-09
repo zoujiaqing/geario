@@ -282,15 +282,6 @@ impl IoRef {
     }
 
     #[inline]
-    /// Get mut access to src read buffer
-    pub fn with_read_src_buf<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut BytesMut) -> R,
-    {
-        self.0.buffer.with_read_src(self, f)
-    }
-
-    #[inline]
     /// Get mut access to dest write buffer
     pub fn with_write_dst_buf<F, R>(&self, f: F) -> R
     where

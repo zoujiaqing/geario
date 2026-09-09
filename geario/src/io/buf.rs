@@ -61,13 +61,6 @@ impl Stack {
         f(&self.buffers[self.buffers.len() - 2])
     }
 
-    pub(crate) fn with_read_src<F, R>(&self, io: &IoRef, f: F) -> R
-    where
-        F: FnOnce(&mut BytesMut) -> R,
-    {
-        self.with_last(|buf| buf.with_read(io, f))
-    }
-
     pub(crate) fn with_read_dst<F, R>(&self, io: &IoRef, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,

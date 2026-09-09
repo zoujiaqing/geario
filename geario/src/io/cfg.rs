@@ -291,11 +291,6 @@ impl BufConfig {
         }
     }
 
-    /// Get buffer with capacity
-    pub fn buf_with_capacity(&self, cap: usize) -> BytesMut {
-        BytesMut::with_capacity(cap)
-    }
-
     #[inline]
     /// Resize buffer
     pub fn resize(&self, buf: &mut BytesMut) {

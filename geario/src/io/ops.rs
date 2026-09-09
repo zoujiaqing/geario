@@ -25,22 +25,6 @@ impl TimerHandle {
         self.0 != 0
     }
 
-    pub fn remains(&self) -> Seconds {
-        IoManager::with(|mgr| {
-            let cur = mgr.timers.current;
-            if self.0 <= cur {
-                Seconds::ZERO
-            } else {
-                #[allow(clippy::cast_possible_truncation)]
-                Seconds((self.0 - cur) as u16)
-            }
-        })
-    }
-
-    pub fn instant(&self) -> Instant {
-        IoManager::with(|mgr| mgr.timers.base + Duration::from_secs(u64::from(self.0)))
-    }
-
     pub(crate) fn update(self, timeout: Seconds, io: &IoRef) -> TimerHandle {
         IoManager::with(|mgr| {
             let new_hnd = mgr.timers.current + u32::from(timeout.0);
