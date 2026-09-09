@@ -762,7 +762,9 @@ mod tests {
         let fut2 = sleep(Millis(200));
 
         fut2.await;
-        #[cfg(not(target_os = "macos"))]
+        // Skipped where the platform clock is coarse (macOS ~1ms, Windows
+        // ~15.6ms with timer coalescing): the tight bounds below are unreliable.
+        #[cfg(not(any(target_os = "macos", windows)))]
         {
             let _elapsed = time.elapsed();
             assert!(
@@ -773,7 +775,7 @@ mod tests {
 
         fut1.await;
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         {
             let _elapsed = time.elapsed();
             assert!(
@@ -784,7 +786,7 @@ mod tests {
 
         let time = Instant::now();
         sleep(Millis(25)).await;
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         {
             let _elapsed = time.elapsed();
             assert!(
