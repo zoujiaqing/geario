@@ -41,18 +41,28 @@ async fn writes_straight_to_the_socket_without_buffering() {
         .get_ref()
         .try_write_vectored(&[IoSlice::new(b"one "), IoSlice::new(b"two")])
         .expect("direct write");
-    if n == 0 {
-        // A completion-based driver (iocp) cannot hand bytes to the socket
-        // synchronously: Handle::write_bufs declines by default, so the fast
-        // path is never taken. There is nothing for this test to check then;
-        // the buffered path is covered by the other cases in this file.
-        return;
-    }
-    assert_eq!(n, 7, "the socket was empty, it should have taken it all");
 
-    // The point of the path: nothing was copied into the write buffer, so
-    // there is nothing left for a flush to do.
-    assert_eq!(io.get_ref().with_write_buf(|b| b.len()).unwrap(), 0);
+    #[cfg(not(windows))]
+    {
+        // Readiness drivers (epoll/kqueue) and the io_uring backend implement
+        // the fast path, so it must take everything and leave nothing in the
+        // write buffer. If direct write silently breaks, n drops and this
+        // fails rather than passing quietly.
+        assert_eq!(n, 7, "the socket was empty, it should have taken it all");
+        assert_eq!(io.get_ref().with_write_buf(|b| b.len()).unwrap(), 0);
+    }
+    #[cfg(windows)]
+    {
+        // The iocp backend has not implemented the optional write_bufs
+        // capability yet (io_uring, also completion-based, has). It must
+        // decline cleanly with 0, never a partial count, and the bytes then
+        // go out through the write buffer like any other write.
+        assert_eq!(n, 0, "a declining driver must take none, not part");
+        io.get_ref()
+            .with_write_buf(|b| b.extend_from_slice(b"one two"))
+            .unwrap();
+        io.flush(true).await.expect("flush");
+    }
 
     let echoed = io.recv(&BytesCodec).await.expect("recv").expect("no data");
     assert_eq!(&echoed[..], b"one two");
