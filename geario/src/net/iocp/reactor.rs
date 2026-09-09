@@ -20,8 +20,8 @@ use windows_sys::Win32::{
 
 use crate::io::Io;
 use crate::rt::{DriverType, Notify, PollResult, Runtime};
-use crate::syscall;
 use crate::service::cfg::SharedCfg;
+use crate::syscall;
 use socket2::{Protocol, SockAddr, Socket, Type};
 
 use super::{Overlapped, TcpStream, connect, stream::StreamOps};
