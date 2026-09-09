@@ -13,10 +13,12 @@ use std::io::{Read, Write};
 use geario::codec::BytesCodec;
 use geario::service::cfg::SharedCfg;
 
-/// Echo server: whatever a connection sends, it sends back. A 128 KB echo is
-/// eight 16 KB write pages, so the response is vectored, and a small socket
-/// buffer plus a slow reader forces the write to complete in several pieces.
-fn echo_server() -> std::net::SocketAddr {
+/// Server that sends a large blob back in a single `send()` on any request.
+/// Writing the whole blob at once queues many write pages together, so the
+/// write task gathers them into one vectored send; a small socket send buffer
+/// then makes that send complete in pieces, exercising the short-write
+/// requeue. `resp_len` bytes go out per request.
+fn blob_server(resp_len: usize) -> std::net::SocketAddr {
     let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = lst.local_addr().unwrap();
     geario::rt::spawn(async move {
@@ -29,14 +31,30 @@ fn echo_server() -> std::net::SocketAddr {
             let Ok(Ok((stream, _))) = accepted else {
                 return;
             };
+            // A small send buffer makes the kernel accept a big response only
+            // in pieces, so the writev returns short and the requeue path runs.
+            let sref = socket2::SockRef::from(&stream);
+            let _ = sref.set_send_buffer_size(16 * 1024);
             stream.set_nonblocking(true).ok();
-            let Ok(io) = geario::net::from_tcp_stream(stream, SharedCfg::new("ECHO").into()) else {
+            let Ok(io) = geario::net::from_tcp_stream(stream, SharedCfg::new("BLOB").into()) else {
                 continue;
             };
+            let blob = pattern(resp_len);
             geario::rt::spawn(async move {
                 let codec = BytesCodec;
-                while let Ok(Some(item)) = io.recv(&codec).await {
-                    if io.send(item, &codec).await.is_err() {
+                while let Ok(Some(_req)) = io.recv(&codec).await {
+                    // extend_from_slice fragments the blob across write pages,
+                    // so the write task has several pages queued at once and
+                    // gathers them into one vectored send -- unlike the codec's
+                    // append, which wraps the whole buffer as a single page.
+                    if io
+                        .get_ref()
+                        .with_write_buf(|b| b.extend_from_slice(&blob))
+                        .is_err()
+                    {
+                        break;
+                    }
+                    if io.flush(true).await.is_err() {
                         break;
                     }
                 }
@@ -56,8 +74,9 @@ fn pattern(len: usize) -> Vec<u8> {
 
 #[geario::test]
 async fn a_multipage_response_survives_a_piecewise_socket() {
-    let addr = echo_server();
-    let sent = pattern(128 * 1024);
+    let resp_len = 128 * 1024;
+    let addr = blob_server(resp_len);
+    let sent = pattern(resp_len);
 
     // A blocking client on its own thread, with a small receive buffer and a
     // deliberately slow drain, so the server's writev cannot complete in one
@@ -65,10 +84,15 @@ async fn a_multipage_response_survives_a_piecewise_socket() {
     let result = geario::rt::spawn_blocking(move || {
         let mut s = std::net::TcpStream::connect(addr).unwrap();
         s.set_nodelay(true).unwrap();
+        s.set_write_timeout(Some(std::time::Duration::from_secs(20)))
+            .unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(20)))
+            .unwrap();
         let sock = socket2::SockRef::from(&s);
         let _ = sock.set_recv_buffer_size(8 * 1024);
 
-        s.write_all(&sent).unwrap();
+        // Trigger one blob.
+        s.write_all(b"go").unwrap();
         let mut got = vec![0u8; sent.len()];
         let mut off = 0;
         while off < got.len() {
@@ -94,21 +118,40 @@ async fn a_multipage_response_survives_a_piecewise_socket() {
     if let Some(i) = (0..sent.len()).find(|&i| got[i] != sent[i]) {
         panic!("byte {i} differs: got {} want {}", got[i], sent[i]);
     }
+
+    // On the io_uring build, prove the paths under test actually ran: a
+    // multi-page Writev was submitted and at least one of them short-wrote and
+    // requeued. Without this the integrity pass alone could not distinguish
+    // the vectored path from any other.
+    #[cfg(all(target_os = "linux", feature = "neon-uring"))]
+    {
+        let (submits, short, _cancels) = geario::net::uring::write_stats::write_path();
+        eprintln!("WRITE_PATH submits={submits} short={short} cancels={_cancels}");
+        assert!(submits > 0, "no multi-page Writev was submitted");
+        assert!(
+            short > 0,
+            "no short write was forced; the requeue path was not exercised"
+        );
+    }
 }
 
 /// A client that disconnects in the middle of receiving a large response must
 /// not crash or wedge the server: a later connection still works.
 #[geario::test]
 async fn a_disconnect_midresponse_leaves_the_server_healthy() {
-    let addr = echo_server();
-    let big = pattern(256 * 1024);
+    let addr = blob_server(256 * 1024);
 
-    // First client: send a large request, read a little, then drop.
-    let b = big.clone();
+    // First client: trigger a big response, read a little, then drop.
     geario::rt::spawn_blocking(move || {
         let mut s = std::net::TcpStream::connect(addr).unwrap();
         s.set_nodelay(true).unwrap();
-        s.write_all(&b).unwrap();
+        s.set_write_timeout(Some(std::time::Duration::from_secs(20)))
+            .unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(20)))
+            .unwrap();
+        let sock = socket2::SockRef::from(&s);
+        let _ = sock.set_recv_buffer_size(8 * 1024);
+        s.write_all(b"go").unwrap();
         let mut buf = [0u8; 1024];
         let _ = s.read(&mut buf);
         // drop s -> disconnect mid-response
@@ -116,15 +159,22 @@ async fn a_disconnect_midresponse_leaves_the_server_healthy() {
     .await
     .unwrap();
 
-    // Second client: a normal small round-trip must still succeed.
+    // Second client: the server must still accept and serve. It reads the
+    // first chunk of the blob and checks it matches the known pattern, which
+    // proves the server survived the mid-response disconnect and is serving
+    // correct data, not that it echoes.
     let ok = geario::rt::spawn_blocking(move || {
+        let want = pattern(256 * 1024);
         let mut s = std::net::TcpStream::connect(addr).unwrap();
         s.set_nodelay(true).unwrap();
-        let msg = b"still alive";
-        s.write_all(msg).unwrap();
-        let mut got = vec![0u8; msg.len()];
+        s.set_read_timeout(Some(std::time::Duration::from_secs(20)))
+            .unwrap();
+        s.set_write_timeout(Some(std::time::Duration::from_secs(20)))
+            .unwrap();
+        s.write_all(b"go").unwrap();
+        let mut got = vec![0u8; 4096];
         s.read_exact(&mut got).unwrap();
-        got == msg
+        got[..] == want[..got.len()]
     })
     .await
     .unwrap();

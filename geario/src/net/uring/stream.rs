@@ -11,6 +11,32 @@ use socket2::Socket;
 use super::reactor::{Handler, Reactor, ReactorApi};
 use crate::net::helpers::Queue;
 
+/// Test-visible counters for the vectored-write path. Relaxed increments on
+/// the write-submission and write-completion paths, which are already
+/// syscall-bound, so the cost is negligible; they exist so a test can assert
+/// that a multi-page `Writev`, a short write, and a write cancel actually
+/// happened rather than inferring it from a data-integrity pass.
+pub mod stats {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    pub(super) static WRITEV_SUBMITS: AtomicU64 = AtomicU64::new(0);
+    pub(super) static WRITEV_SHORT: AtomicU64 = AtomicU64::new(0);
+    pub(super) static WRITE_CANCELS: AtomicU64 = AtomicU64::new(0);
+
+    /// (multi-page Writev submissions, short writes requeued, write cancels).
+    pub fn write_path() -> (u64, u64, u64) {
+        (
+            WRITEV_SUBMITS.load(Ordering::Relaxed),
+            WRITEV_SHORT.load(Ordering::Relaxed),
+            WRITE_CANCELS.load(Ordering::Relaxed),
+        )
+    }
+
+    pub(super) fn inc(c: &AtomicU64) {
+        c.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct StreamOps(Rc<StreamOpsInner>);
 
@@ -263,6 +289,7 @@ impl Handler for StreamOpsHandler {
                     if let Some(item) = st.streams.get_mut(id) {
                         #[cfg(feature = "trace")]
                         log::trace!("{}: Send canceled: {:?}", item.tag(), item.fd());
+                        stats::inc(&stats::WRITE_CANCELS);
                         item.ctx.with_write_buf(|pages| pages.prepend(buf));
                         item.wr_op.take();
                         item.flags.remove(Flags::WR_CANCELING);
@@ -432,13 +459,18 @@ impl Handler for StreamOpsHandler {
                                 }
                             }
                         }
+                        let mut requeued = false;
                         item.ctx.with_write_buf(|wrt| {
                             for page in pages.into_iter().rev() {
                                 if !page.is_empty() {
                                     wrt.prepend(page);
+                                    requeued = true;
                                 }
                             }
                         });
+                        if requeued {
+                            stats::inc(&stats::WRITEV_SHORT);
+                        }
 
                         let res = res.map(|n| {
                             if n == 0 {
@@ -624,6 +656,7 @@ impl StreamOpsStorage {
                 let mut pages: Vec<BytePage> = Vec::with_capacity(rest.len() + 1);
                 pages.push(first);
                 pages.extend(rest);
+                stats::inc(&stats::WRITEV_SUBMITS);
                 #[cfg(feature = "trace")]
                 log::trace!("{}: SndV({id}) pages:{}", item.ctx.tag(), pages.len());
                 let iovecs: Vec<libc::iovec> = pages
