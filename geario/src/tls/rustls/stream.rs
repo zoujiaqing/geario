@@ -204,7 +204,15 @@ where
         };
 
         if wants_write {
-            io.flush(false).await?;
+            if let Err(e) = io.flush(false).await {
+                // Our write can lose a race with the peer's close: if the peer
+                // rejected the handshake it sent a fatal alert and then closed,
+                // and the write fails before we have read that alert. Drain the
+                // read side once so the session turns the alert into the stored
+                // reason, and prefer it over the raw transport error.
+                let _ = io.read_notify().await;
+                return Err(io.st().error().unwrap_or(e));
+            }
         }
 
         if handshaking {
