@@ -1,4 +1,0 @@
-16KB io_uring, same binary, one factor at a time:
-  per-page SendZc  (items=1,zc on)  -> 112654 qps   (original / ntex-equivalent)
-  per-page plain   (items=1,zc off) -> 134026 qps   (+19% dropping SendZc)
-  vectored Writev  (items=16)       -> 173798 qps   (+30% batching on top; +54% combined)

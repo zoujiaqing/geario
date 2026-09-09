@@ -1,0 +1,41 @@
+# binaries:
+#   15430dc805200f1baf4c915add5f0a2a67cd63498c8905cf04d9de7bbb4f72b6  srv-geario-uring
+#   2331f053e46aa5a4d6e07296c9b50af1190c006c0a104b0cf9a479525ea44dd6  client
+# 16KB io_uring, conns=4 workers=4 rounds=12 secs=5
+# round config qps bad
+1 zc 110614 0
+1 plain 126710 0
+1 vec 167627 0
+2 zc 116248 0
+2 plain 131105 0
+2 vec 171210 0
+3 zc 114837 0
+3 plain 129580 0
+3 vec 170395 0
+4 zc 117978 0
+4 plain 129897 0
+4 vec 173454 0
+5 zc 115111 0
+5 plain 124445 0
+5 vec 161575 0
+6 zc 110148 0
+6 plain 128714 0
+6 vec 171586 0
+7 zc 120716 0
+7 plain 123534 0
+7 vec 176605 0
+8 zc 114989 0
+8 plain 129529 0
+8 vec 166422 0
+9 zc 110485 0
+9 plain 127379 0
+9 vec 172648 0
+10 zc 115786 0
+10 plain 126200 0
+10 vec 172940 0
+11 zc 120103 0
+11 plain 126668 0
+11 vec 163427 0
+12 zc 118557 0
+12 plain 127699 0
+12 vec 167447 0

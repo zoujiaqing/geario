@@ -38,22 +38,25 @@ the lead on the default Linux path that io_uring parity previously lacked.
 ## Attribution: batching vs dropping SendZc
 
 The vectored change does two things at once -- merges several submissions
-into one, and stops using SendZc for the multi-page case -- so the lead is
-not all from batching. Isolated on the same binary at 16 KB io_uring, one
-factor at a time (via `GEARIO_URING_MAX_WRITE_ITEMS` and
-`GEARIO_URING_ZC_SIZE`):
+into one, and stops using SendZc for the multi-page case. Three configs of
+the same binary, rotated per round, twelve rounds at 16 KB io_uring, via
+`GEARIO_URING_MAX_WRITE_ITEMS` and `GEARIO_URING_ZC_SIZE`; bootstrap 95% CI,
+zero errors, binary and client hashes in the raw log:
 
-| configuration | qps | step |
+| step | delta | 95% CI |
 | --- | --- | --- |
-| per-page SendZc (the original behaviour) | 112,654 | baseline |
-| per-page plain (SendZc off, still one page per SQE) | 134,026 | dropping SendZc: **+19%** |
-| vectored Writev (one submission, plain) | 173,798 | batching on top: **+30%** |
+| dropping SendZc (per-page) | +10.64% | [+8.31%, +12.86%] |
+| batching on top (vectored) | +32.94% | [+30.95%, +35.28%] |
+| combined vs the original per-page SendZc | +47.03% | [+43.72%, +50.14%] |
 
-Combined, +54% over the original per-page-SendZc path, which is what ntex 4.0
-still does. Batching is the larger share but not the whole; dropping SendZc
-is a real, separable part of it.
+Batching is the dominant factor; dropping SendZc is a real but smaller
+separable part. The two compose multiplicatively (1.106 x 1.329 = 1.47).
+The original per-page-SendZc path is what ntex 4.0 still runs, so the
+combined figure is the like-for-like lead. (An earlier one-shot run put the
+split at 19/30; the rotated sampling above supersedes those numbers -- the
+single-run ratios were not stable.)
 
-## Correctness
+## Correctness## Correctness
 
 Full suites pass on Rocky with the io_uring driver: geario-http 168 tests
 (including the 128 KB full-duplex streaming/keep-alive test that caught the
