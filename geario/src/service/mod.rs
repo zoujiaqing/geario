@@ -23,7 +23,6 @@ mod fn_service;
 mod fn_shutdown;
 mod macros;
 mod map;
-mod map_config;
 mod map_err;
 mod map_init_err;
 mod map_state;
@@ -45,7 +44,6 @@ pub use crate::service::ctx::Ctx;
 pub use crate::service::fn_service::{
     fn_factory, fn_factory_with_config, fn_service, fn_service_st,
 };
-pub use crate::service::map_config::{map_config, unit_config};
 pub use crate::service::map_state::map_state;
 pub use crate::service::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use crate::service::pipeline::Pipeline;
@@ -451,7 +449,6 @@ pub mod dev {
     };
     pub use crate::service::fn_shutdown::FnShutdown;
     pub use crate::service::map::{Map, MapFactory};
-    pub use crate::service::map_config::{MapConfig, UnitConfig};
     pub use crate::service::map_err::{MapErr, MapErrFactory};
     pub use crate::service::map_init_err::MapInitErr;
     pub use crate::service::map_state::MapState;
