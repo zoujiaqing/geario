@@ -749,7 +749,6 @@ mod tests {
     use crate::util::time::{Millis, interval, sleep};
 
     #[geario::test]
-    #[allow(unused_variables, clippy::used_underscore_binding)]
     async fn test_timer() {
         crate::util::spawn(async {
             let s = interval(Millis(25));
@@ -757,42 +756,49 @@ mod tests {
                 s.tick().await;
             }
         });
+
+        // The lower bound is the contract that matters and holds everywhere: a
+        // timer must not fire early. The upper bound only guards against gross
+        // lateness, so it gets slack where the platform clock is coarse (macOS
+        // ~1ms, Windows ~15.6ms with timer coalescing) or the runner is loaded.
+        #[cfg(not(any(target_os = "macos", windows)))]
+        let slack = Duration::from_millis(0);
+        #[cfg(any(target_os = "macos", windows))]
+        let slack = Duration::from_millis(500);
+
         let time = Instant::now();
         let fut1 = sleep(Millis(1000));
         let fut2 = sleep(Millis(200));
 
         fut2.await;
-        // Skipped where the platform clock is coarse (macOS ~1ms, Windows
-        // ~15.6ms with timer coalescing): the tight bounds below are unreliable.
-        #[cfg(not(any(target_os = "macos", windows)))]
-        {
-            let _elapsed = time.elapsed();
-            assert!(
-                _elapsed > Duration::from_millis(200) && _elapsed < Duration::from_millis(300),
-                "elapsed: {_elapsed:?}"
-            );
-        }
+        let elapsed = time.elapsed();
+        assert!(
+            elapsed > Duration::from_millis(200),
+            "fired early: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(300) + slack,
+            "fired too late: {elapsed:?}"
+        );
 
         fut1.await;
-
-        #[cfg(not(any(target_os = "macos", windows)))]
-        {
-            let _elapsed = time.elapsed();
-            assert!(
-                _elapsed > Duration::from_secs(1) && _elapsed < Duration::from_millis(1200), // osx
-                "elapsed: {_elapsed:?}",
-            );
-        }
+        let elapsed = time.elapsed();
+        assert!(elapsed > Duration::from_secs(1), "fired early: {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_millis(1200) + slack,
+            "fired too late: {elapsed:?}"
+        );
 
         let time = Instant::now();
         sleep(Millis(25)).await;
-        #[cfg(not(any(target_os = "macos", windows)))]
-        {
-            let _elapsed = time.elapsed();
-            assert!(
-                _elapsed > Duration::from_millis(20) && _elapsed < Duration::from_millis(50),
-                "elapsed: {_elapsed:?}",
-            );
-        }
+        let elapsed = time.elapsed();
+        assert!(
+            elapsed > Duration::from_millis(20),
+            "fired early: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(50) + slack,
+            "fired too late: {elapsed:?}"
+        );
     }
 }
