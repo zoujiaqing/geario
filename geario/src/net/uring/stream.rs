@@ -552,25 +552,32 @@ impl StreamOpsStorage {
             return;
         }
 
-        // Gather queued pages, up to the item and byte ceilings.
-        let mut pages: Vec<BytePage> = item.ctx.with_write_buf(|wrt| {
-            let mut pages = Vec::new();
-            let mut size = 0;
-            while let Some(page) = wrt.take() {
-                size += page.len();
-                pages.push(page);
-                if pages.len() == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
-                    break;
+        // Take the first page; only reach for a Vec if a second page is
+        // queued. A single-page response -- the common small case -- keeps the
+        // original path with no allocation, so vectoring costs the big
+        // responses nothing and the small ones nothing either.
+        let (first, rest) = item.ctx.with_write_buf(|wrt| {
+            let Some(first) = wrt.take() else {
+                return (None, Vec::new());
+            };
+            let mut rest: Vec<BytePage> = Vec::new();
+            let mut size = first.len();
+            while size < MAX_WRITE_SIZE && rest.len() + 1 < MAX_WRITE_ITEMS {
+                match wrt.take() {
+                    Some(page) => {
+                        size += page.len();
+                        rest.push(page);
+                    }
+                    None => break,
                 }
             }
-            pages
+            (Some(first), rest)
         });
 
-        match pages.len() {
-            0 => {}
-            1 => {
+        match first {
+            None => {}
+            Some(buf) if rest.is_empty() => {
                 // Single page keeps the existing send / zero-copy choice.
-                let buf = pages.pop().unwrap();
                 #[cfg(feature = "trace")]
                 log::trace!("{}: Snd({id}) size:{:?}", item.ctx.tag(), buf.len());
                 let op_id = self.ops.insert(Some(Operation::Send {
@@ -594,13 +601,15 @@ impl StreamOpsStorage {
                     }
                 });
             }
-            n => {
+            Some(first) => {
                 // Several pages go out in one vectored send. Plain writev, not
                 // zero-copy: SendZc is single-buffer and does not pay at these
                 // sizes anyway.
-                let _ = n;
+                let mut pages: Vec<BytePage> = Vec::with_capacity(rest.len() + 1);
+                pages.push(first);
+                pages.extend(rest);
                 #[cfg(feature = "trace")]
-                log::trace!("{}: SndV({id}) pages:{n}");
+                log::trace!("{}: SndV({id}) pages:{}", item.ctx.tag(), pages.len());
                 let iovecs: Vec<libc::iovec> = pages
                     .iter()
                     .map(|p| libc::iovec {
