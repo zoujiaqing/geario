@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -107,6 +107,25 @@ jobs:
         run: |
           set -e
           for f in "rustls" "neon-polling" "neon-uring" "neon-polling,neon-uring"; do
+            echo "--- features: $f ---"
+            cargo check -p geario --all-targets --features "$f"
+          done
+
+  # Windows ships a completion-based driver (iocp) that no other
+  # platform's matrix can reach. It is the default there, so a plain
+  # check exercises it; neon-iocp names it explicitly.
+  features-windows:
+    name: feature combinations (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: check
+        shell: bash
+        run: |
+          set -e
+          for f in "rustls" "neon-iocp" "rustls,neon-iocp"; do
             echo "--- features: $f ---"
             cargo check -p geario --all-targets --features "$f"
           done
