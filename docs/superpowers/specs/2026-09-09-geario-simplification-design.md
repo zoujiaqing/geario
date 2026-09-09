@@ -40,14 +40,15 @@ ntex-web 服务的过度抽象、让运行逻辑更直、架构更贴近"thread-
 
 任何触及 io/service/dispatcher/tls 的重构,合入前须证明以下行为不变:
 
-- h1/h2 **多路复用**(h2 单连接多流)
-- **流控**(h2 window)、**背压**(读写限速 / inflight 上限)
-- **取消**(流/请求中途取消、drop 语义)
-- **断连**(对端 RST/EOF、半关闭)
-- **TLS / ALPN**(h1↔h2 协商正确)
-- **优雅关闭**(drain、in-flight 请求收尾)
+- **h1**:keep-alive 连接复用、请求流水线(pipelining)、响应顺序
+- **h2**:单连接多流(multiplexing)、流控(window)、单流取消(RST_STREAM)
+- **背压**:读写限速 / inflight 上限
+- **断连**:对端 RST/EOF、半关闭
+- **TLS / ALPN**:h1↔h2 协商正确
+- **优雅关闭**:drain、in-flight 请求收尾
 
-对应测试:geario-http 现有测试 + 需要时补齐上述场景的用例。
+对应测试:每项在触及相关代码的任务里**逐步关联到具体测试名**(而非笼统写
+"现有测试覆盖");缺失的场景先补用例再改代码。
 
 ## 3. 基线现状
 
@@ -88,29 +89,38 @@ geario 单包约 43,328 行。按目录:
 
 ## 5. 分层方案
 
-### 5.0 第 0 层:三平台 CI 护栏
+### 5.0 第 0 层:三平台 CI 护栏 —— 已完成
 
-状态:**配置已完成,等待真实 Windows runner 运行验收。**
+状态:**真实 CI(含 Windows runner,MSVC 工具链)三平台全绿,已核实。**
 
-没有 Windows CI 是 iocp 腐化的直接原因。本层先补护栏,后续所有删改才有三平台守门。
+- geario run:https://github.com/zoujiaqing/geario/actions/runs/34360748184
+- geario-http run:https://github.com/zoujiaqing/geario-http/actions/runs/34358990902
 
-- **iocp 编译修复(已做)**:`geario/src/net/iocp/reactor.rs` 的 `syscall` 宏
+注意:CI 绿只证明"iocp 后端在当前用例上能编能跑",**不等于"iocp 已无问题"**。
+它此前从未在 CI 跑过,首跑就逼出了三个潜伏问题(见下),说明覆盖仍浅。
+
+没有 Windows CI 是 iocp 腐化的直接原因。本层补护栏,后续所有删改才有三平台守门。
+
+- **iocp 编译修复**:`geario/src/net/iocp/reactor.rs` 的 `syscall` 宏
   从 `crate::rt::{...,syscall}` 改为 `use crate::syscall;`(与 uring/polling 一致)。
   第二个"未用导入"错误是该宏未解析的连锁,修好即消。
-- **Windows CI(已配置)**:
+- **Windows CI**:
   - geario `test` 矩阵加 `windows-latest`(**实跑 `cargo test`,非仅编译**);
     新增 `features-windows` job 跑 `rustls / neon-iocp / rustls,neon-iocp` 的
     all-targets check。
   - geario-http 新增 `test-windows` job,单测 `geario-http` 本 crate
     (`full,rustls,hyper-full`),避开 unix-only 的 bench 工作区成员。
-- **本地交叉编译验证(已做,mac→x86_64-pc-windows-gnu)**:geario 默认(iocp)/
-  rustls/neon-iocp、geario-polling、geario-http 测试目标均零错误。
-- **未验收项(重要)**:
-  1. iocp 在真实 Windows 上的**运行期**通过与否,须以 Windows runner 结果为准。
-  2. 本地 **GNU** 交叉检查**不能替代** Windows runner 通常使用的 **MSVC** 构建;
-     以 CI(MSVC)为最终判据。
+- **首跑逼出并修复的 3 个问题(均非 iocp 驱动缺陷)**:
+  1. `iocp/reactor.rs` 编译腐化(上条)——真 bug,无 CI 才没被发现。
+  2. `util::time::wheel` 的 `test_timer`:下界(不提前触发)**改为所有平台都查**;
+     只有上界在粗时钟平台放宽 slack。**遗留**:确定性时间轮逻辑测试(可注入时钟
+     验证到期/顺序/取消/重置)需要 wheel 暴露可控时钟,属单独重构,记为后续项。
+  3. `tests/direct_write.rs`:就绪式 + io_uring 驱动**保留严格断言**(能抓直写回归);
+     iocp 尚未实现可选的 `write_bufs` 能力,测试验证其"干净拒绝(恰好 0)+ 缓冲路径
+     正确送达"。修正了此前"完成式驱动做不到直写"的错误结论(io_uring 同为完成式却已实现)。
+- **遗留提升项**:上面 2 的确定性时间轮测试;必要时给 h1/h2 行为项(§2.1)补齐场景用例。
 
-**验收**:三平台 CI 全绿(含 Windows runner 上的运行期测试,MSVC 工具链)。
+**本层验收:达成**(三平台 CI 全绿)。
 
 ### 5.1 删除资格(所有删除类任务的统一门)
 
