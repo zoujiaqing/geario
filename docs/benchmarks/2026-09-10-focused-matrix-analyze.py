@@ -14,7 +14,7 @@ def ci(rs):
     b = sorted(sum(random.choice(rs) for _ in rs) / len(rs) for _ in range(10000))
     return b[250], b[9750]
 def run(path):
-    blocks = re.split(r'#{3,}\s*(\S+ body=\d+)\s*#{3,}', open(path).read())
+    blocks = re.split(r'#{3,}\s*(.+? body=\d+)\s*#{3,}', open(path).read())
     for i in range(1, len(blocks), 2):
         label = blocks[i]; rows = {}
         for line in blocks[i + 1].splitlines():
