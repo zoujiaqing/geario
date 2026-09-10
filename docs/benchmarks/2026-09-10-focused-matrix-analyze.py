@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """Focused perf acceptance: paired A/B per (driver, body).
 
-A = geario-before, B = geario-after. Pre-registered non-inferiority at 3%:
-qps passes only if the 95% bootstrap CI lower bound of mean(B/A) > 0.97.
-p99 and CPU-per-request (lower is better) are read as parity unless the CI
-sits clear of 1.0; RSS is informational. A CI merely crossing 1.0 is not a pass.
-Usage: analyze.py <raw.txt>
+A = geario-before, B = geario-after. Verdicts are pre-registered; a CI merely
+crossing 1.0 is never a pass, and no metric is called "parity" unless its CI
+actually excludes a >3% move.
+
+  qps (higher better): PASS only if 95% CI lower bound of mean(B/A) > 0.97.
+  p99 / cpu-per-req (lower better):
+      improved         if CI upper  < 1.00
+      non-inferior     if CI upper <= 1.03
+      REGRESSED (>3%)  if CI lower  > 1.03
+      NOT ESTABLISHED  otherwise (CI admits a >3% increase)
+  Any round with bad>0 makes the whole config INVALID (no verdict).
+Usage: analyze.py <raw.txt> [...]
 """
 import re, sys, random, statistics
 random.seed(11)
@@ -13,6 +20,11 @@ ROW = re.compile(r'^(\d+)\s+([AB])\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s
 def ci(rs):
     b = sorted(sum(random.choice(rs) for _ in rs) / len(rs) for _ in range(10000))
     return b[250], b[9750]
+def lower_better(lo, hi):
+    if hi < 1.0:  return "improved"
+    if hi <= 1.03: return "non-inferior (<=3%)"
+    if lo > 1.03: return "REGRESSED (>3%)"
+    return "NOT ESTABLISHED"
 def run(path):
     blocks = re.split(r'#{3,}\s*(.+? body=\d+)\s*#{3,}', open(path).read())
     for i in range(1, len(blocks), 2):
@@ -26,15 +38,18 @@ def run(path):
         if not pairs:
             continue
         bad = sum(a[5] + b[5] for a, b in pairs)
-        print(f"=== {label}: {len(pairs)} paired rounds, bad={bad:.0f} ===")
+        tag = "  [INVALID: bad>0]" if bad > 0 else ""
+        print(f"=== {label}: {len(pairs)} paired rounds, bad={bad:.0f}{tag} ===")
         for idx, name in [(0, "qps"), (2, "p99"), (3, "cpu/req"), (4, "rss_mb")]:
             A = [a[idx] for a, b in pairs]; B = [b[idx] for a, b in pairs]
             rs = [b[idx] / a[idx] for a, b in pairs if a[idx] > 0]
             lo, hi = ci(rs)
-            if name == "qps":
-                v = "PASS (non-inf 3%)" if lo > 0.97 else "NOT ESTABLISHED (CI too wide)"
+            if bad > 0:
+                v = "invalid"
+            elif name == "qps":
+                v = "PASS (non-inf 3%)" if lo > 0.97 else "NOT ESTABLISHED"
             elif name in ("p99", "cpu/req"):
-                v = "better" if hi < 1.0 else ("parity (<=3%)" if hi < 1.03 else "parity within noise")
+                v = lower_better(lo, hi)
             else:
                 v = ""
             print(f"  {name:7} A_med={statistics.median(A):9.1f} B_med={statistics.median(B):9.1f}"
