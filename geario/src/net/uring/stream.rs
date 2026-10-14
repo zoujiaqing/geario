@@ -1,6 +1,6 @@
 use std::{cell::Cell, cmp, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc};
 
-use crate::bytes::{BufMut, BytePage, BytesMut};
+use crate::bytes::{BufMut, BytePage, BytePages, BytesMut};
 use crate::io::{IoContext, IoTaskStatus};
 use crate::rt::Arbiter;
 use crate::util::channel::pool;
@@ -11,29 +11,29 @@ use socket2::Socket;
 use super::reactor::{Handler, Reactor, ReactorApi};
 use crate::net::helpers::Queue;
 
-/// Test-visible counters for the vectored-write path. Relaxed increments on
-/// the write-submission and write-completion paths, which are already
-/// syscall-bound, so the cost is negligible; they exist so a test can assert
-/// that a multi-page `Writev`, a short write, and a write cancel actually
-/// happened rather than inferring it from a data-integrity pass.
+/// Worker-local diagnostic counters. Keeping these local avoids a shared
+/// atomic cache line on every vectored send across all reactor threads.
+/// Snapshots describe the calling worker, not a process-wide aggregate.
 pub mod stats {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::cell::Cell;
 
-    pub(super) static WRITEV_SUBMITS: AtomicU64 = AtomicU64::new(0);
-    pub(super) static WRITEV_SHORT: AtomicU64 = AtomicU64::new(0);
-    pub(super) static WRITE_CANCELS: AtomicU64 = AtomicU64::new(0);
+    std::thread_local! {
+        pub(super) static WRITEV_SUBMITS: Cell<u64> = const { Cell::new(0) };
+        pub(super) static WRITEV_SHORT: Cell<u64> = const { Cell::new(0) };
+        pub(super) static WRITE_CANCELS: Cell<u64> = const { Cell::new(0) };
+    }
 
-    /// (multi-page Writev submissions, short writes requeued, write cancels).
+    /// This worker's (vectored submissions, short writes, write cancels).
     pub fn write_path() -> (u64, u64, u64) {
         (
-            WRITEV_SUBMITS.load(Ordering::Relaxed),
-            WRITEV_SHORT.load(Ordering::Relaxed),
-            WRITE_CANCELS.load(Ordering::Relaxed),
+            WRITEV_SUBMITS.get(),
+            WRITEV_SHORT.get(),
+            WRITE_CANCELS.get(),
         )
     }
 
-    pub(super) fn inc(c: &AtomicU64) {
-        c.fetch_add(1, Ordering::Relaxed);
+    pub(super) fn inc(c: &'static std::thread::LocalKey<Cell<u64>>) {
+        c.set(c.get().wrapping_add(1));
     }
 }
 
@@ -69,37 +69,42 @@ bitflags::bitflags! {
     }
 }
 
-/// Zero-copy send (`SendZc`) is used only above this many bytes; at or below,
-/// a plain `Send` (one copy) is cheaper than pinning pages plus the extra
-/// completion `SendZc` costs. Overridable via `GEARIO_URING_ZC_SIZE` so the
-/// threshold can be measured; `u32::MAX` disables zero-copy entirely.
-fn zc_size() -> u32 {
-    use std::sync::OnceLock;
-    static ZC: OnceLock<u32> = OnceLock::new();
-    *ZC.get_or_init(|| {
-        std::env::var("GEARIO_URING_ZC_SIZE")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(1536)
-    })
+/// Process-wide experimental settings, copied into each worker once. Keep
+/// environment parsing and OnceLock checks out of the per-send path.
+#[derive(Clone, Copy)]
+struct SendConfig {
+    zc_size: u32,
+    max_write_items: usize,
+}
+
+impl SendConfig {
+    fn load() -> Self {
+        static CONFIG: std::sync::OnceLock<SendConfig> = std::sync::OnceLock::new();
+        *CONFIG.get_or_init(|| {
+            Self::parse(
+                std::env::var("GEARIO_URING_ZC_SIZE").ok().as_deref(),
+                std::env::var("GEARIO_URING_MAX_WRITE_ITEMS")
+                    .ok()
+                    .as_deref(),
+            )
+        })
+    }
+
+    fn parse(zc_size: Option<&str>, max_write_items: Option<&str>) -> Self {
+        Self {
+            // u32::MAX disables zero-copy for every supported buffer size.
+            zc_size: zc_size.and_then(|s| s.parse().ok()).unwrap_or(1536),
+            // One page remains useful for attribution experiments. Reject
+            // zero and cap overrides at the driver's supported batch size.
+            max_write_items: max_write_items
+                .and_then(|s| s.parse::<usize>().ok())
+                .filter(|&n| n > 0)
+                .unwrap_or(MAX_WRITE_ITEMS)
+                .min(MAX_WRITE_ITEMS),
+        }
+    }
 }
 const IORING_RECVSEND_POLL_FIRST: u16 = 1;
-
-/// How many pages a single vectored send may gather. Overridable via
-/// `GEARIO_URING_MAX_WRITE_ITEMS` for attribution measurements: setting it to
-/// 1 forces one page per submission (the pre-vectored behaviour), which
-/// isolates the batching gain from the rest.
-fn max_write_items() -> usize {
-    use std::sync::OnceLock;
-    static N: OnceLock<usize> = OnceLock::new();
-    *N.get_or_init(|| {
-        std::env::var("GEARIO_URING_MAX_WRITE_ITEMS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|&n| n >= 1)
-            .unwrap_or(MAX_WRITE_ITEMS)
-    })
-}
 
 /// Most pages gathered into one vectored send, and the byte ceiling for it.
 /// Mirrors the polling driver: one `writev` covers a whole response instead
@@ -107,6 +112,36 @@ fn max_write_items() -> usize {
 /// into several round-trips on io_uring.
 const MAX_WRITE_ITEMS: usize = 16;
 const MAX_WRITE_SIZE: usize = 64 * 1024;
+
+// Build the final owning container before any iovec pointers are taken.
+// The byte budget is a stopping threshold, not a hard cap: the final whole
+// page can cross it, preserving the existing page and short-write semantics.
+fn gather_pages(wrt: &mut BytePages, max_items: usize) -> (Option<BytePage>, Vec<BytePage>) {
+    let Some(first) = wrt.take() else {
+        return (None, Vec::new());
+    };
+    let mut size = first.len();
+    if size >= MAX_WRITE_SIZE || max_items == 1 {
+        return (Some(first), Vec::new());
+    }
+    let Some(second) = wrt.take() else {
+        return (Some(first), Vec::new());
+    };
+    let mut pages = Vec::with_capacity(max_items.min(wrt.num_pages() + 2));
+    size += second.len();
+    pages.push(first);
+    pages.push(second);
+    while size < MAX_WRITE_SIZE && pages.len() < max_items {
+        match wrt.take() {
+            Some(page) => {
+                size += page.len();
+                pages.push(page);
+            }
+            None => break,
+        }
+    }
+    (None, pages)
+}
 
 #[derive(Debug)]
 struct StreamItem {
@@ -130,7 +165,8 @@ enum Operation {
     },
     /// A vectored send of several queued pages in one submission. `iovecs`
     /// points into `pages`, so both are held here until the completion; the
-    /// pages own heap buffers, so moving this `Vec` does not move them.
+    /// Vec owns stable storage for the pages (including inline bytes). Neither
+    /// Vec may grow or mutate its elements before the kernel releases it.
     Writev {
         id: usize,
         pages: Vec<BytePage>,
@@ -162,6 +198,7 @@ struct StreamOpsInner {
 }
 
 struct StreamOpsStorage {
+    send_config: SendConfig,
     ops: Slab<Option<Operation>>,
     streams: Slab<StreamItem>,
 }
@@ -195,6 +232,7 @@ impl StreamOps {
                     delayed_feed: Queue::new(),
                     pool: pool::new(),
                     storage: Cell::new(Some(Box::new(StreamOpsStorage {
+                        send_config: SendConfig::load(),
                         ops,
                         streams: Slab::new(),
                     }))),
@@ -600,31 +638,17 @@ impl StreamOpsStorage {
             return;
         }
 
-        // Take the first page; only reach for a Vec if a second page is
-        // queued. A single-page response -- the common small case -- keeps the
-        // original path with no allocation, so vectoring costs the big
-        // responses nothing and the small ones nothing either.
-        let (first, rest) = item.ctx.with_write_buf(|wrt| {
-            let Some(first) = wrt.take() else {
-                return (None, Vec::new());
-            };
-            let mut rest: Vec<BytePage> = Vec::new();
-            let mut size = first.len();
-            while size < MAX_WRITE_SIZE && rest.len() + 1 < max_write_items() {
-                match wrt.take() {
-                    Some(page) => {
-                        size += page.len();
-                        rest.push(page);
-                    }
-                    None => break,
-                }
-            }
-            (Some(first), rest)
-        });
+        let config = self.send_config;
+        // No allocation for a single page. Once a second page exists, build
+        // the final owning Vec directly; its heap storage stays stable while
+        // the operation is in flight, even if the operation slab moves.
+        let (single, pages) = item
+            .ctx
+            .with_write_buf(|wrt| gather_pages(wrt, config.max_write_items));
 
-        match first {
-            None => {}
-            Some(buf) if rest.is_empty() => {
+        match single {
+            None if pages.is_empty() => {}
+            Some(buf) => {
                 // Single page keeps the existing send / zero-copy choice.
                 #[cfg(feature = "trace")]
                 log::trace!("{}: Snd({id}) size:{:?}", item.ctx.tag(), buf.len());
@@ -642,20 +666,17 @@ impl StreamOpsStorage {
                         unreachable!()
                     };
                 api.submit_inline(op_id, move |entry| {
-                    if item.flags.contains(Flags::NO_ZC) || buf_len <= zc_size() {
+                    if item.flags.contains(Flags::NO_ZC) || buf_len <= config.zc_size {
                         opcode2::Send::with(entry, item.fd()).buffer(buf_ptr, buf_len);
                     } else {
                         opcode2::SendZc::with(entry, item.fd()).buffer(buf_ptr, buf_len);
                     }
                 });
             }
-            Some(first) => {
+            None => {
                 // Several pages go out in one vectored send. Plain writev, not
                 // zero-copy: SendZc is single-buffer and does not pay at these
                 // sizes anyway.
-                let mut pages: Vec<BytePage> = Vec::with_capacity(rest.len() + 1);
-                pages.push(first);
-                pages.extend(rest);
                 stats::inc(&stats::WRITEV_SUBMITS);
                 #[cfg(feature = "trace")]
                 log::trace!("{}: SndV({id}) pages:{}", item.ctx.tag(), pages.len());
@@ -872,5 +893,86 @@ impl Drop for WeakStreamCtl {
         } else {
             self.inner.delayed_feed.push(IdType::Weak(self.id as u32));
         }
+    }
+}
+
+#[cfg(test)]
+mod send_config_tests {
+    use super::{MAX_WRITE_ITEMS, MAX_WRITE_SIZE, SendConfig, gather_pages};
+    use crate::bytes::BytePages;
+
+    #[test]
+    fn diagnostic_counters_do_not_contend_or_mix_workers() {
+        let before = super::stats::write_path();
+        std::thread::spawn(|| {
+            assert_eq!(super::stats::write_path(), (0, 0, 0));
+            super::stats::inc(&super::stats::WRITEV_SUBMITS);
+            assert_eq!(super::stats::write_path(), (1, 0, 0));
+        })
+        .join()
+        .unwrap();
+        assert_eq!(super::stats::write_path(), before);
+    }
+
+    #[test]
+    fn gather_keeps_single_page_allocation_free_and_preserves_tail_order() {
+        let mut queue = BytePages::default();
+        let (single, pages) = gather_pages(&mut queue, 16);
+        assert!(single.is_none());
+        assert_eq!(pages.capacity(), 0);
+        queue.append(vec![1u8; 4]);
+        let (single, pages) = gather_pages(&mut queue, 16);
+        assert_eq!(single.unwrap().as_ref(), &[1; 4]);
+        assert_eq!(pages.capacity(), 0);
+        for byte in 1..=4u8 {
+            queue.append(vec![byte; 4]);
+        }
+        let (single, pages) = gather_pages(&mut queue, 1);
+        assert_eq!(single.unwrap().as_ref(), &[1; 4]);
+        assert_eq!(pages.capacity(), 0);
+        let (single, pages) = gather_pages(&mut queue, 2);
+        assert!(single.is_none());
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].as_ref(), &[2; 4]);
+        assert_eq!(pages[1].as_ref(), &[3; 4]);
+        assert_eq!(queue.take().unwrap().as_ref(), &[4; 4]);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn gather_stops_at_the_byte_budget_without_consuming_the_tail() {
+        let mut queue = BytePages::default();
+        for _ in 0..3 {
+            queue.append(vec![7u8; MAX_WRITE_SIZE / 2]);
+        }
+        let (single, pages) = gather_pages(&mut queue, 16);
+        assert!(single.is_none());
+        assert_eq!(pages.len(), 2);
+        assert_eq!(queue.len(), MAX_WRITE_SIZE / 2);
+        let (single, pages) = gather_pages(&mut queue, 16);
+        assert_eq!(single.unwrap().len(), MAX_WRITE_SIZE / 2);
+        assert_eq!(pages.capacity(), 0);
+    }
+
+    #[test]
+    fn experimental_settings_preserve_safe_batch_limits() {
+        for value in [None, Some("0"), Some("invalid"), Some("-1")] {
+            assert_eq!(
+                SendConfig::parse(None, value).max_write_items,
+                MAX_WRITE_ITEMS
+            );
+        }
+        assert_eq!(SendConfig::parse(None, Some("1")).max_write_items, 1);
+        assert_eq!(SendConfig::parse(None, Some("4")).max_write_items, 4);
+        assert_eq!(
+            SendConfig::parse(None, Some("99999")).max_write_items,
+            MAX_WRITE_ITEMS
+        );
+        assert_eq!(
+            SendConfig::parse(Some("4294967295"), None).zc_size,
+            u32::MAX
+        );
+        assert_eq!(SendConfig::parse(Some("0"), None).zc_size, 0);
+        assert_eq!(SendConfig::parse(Some("invalid"), None).zc_size, 1536);
     }
 }
