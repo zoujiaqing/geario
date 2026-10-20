@@ -109,94 +109,124 @@ scoped_tls::scoped_thread_local!(static CURRENT_DRIVER: Box<dyn Reactor>);
 pub struct DefaultRuntime;
 
 impl Runner for DefaultRuntime {
-    #[allow(unused_variables, clippy::too_many_lines)]
     fn block_on(&self, fut: BlockFuture) -> Result<(), Box<dyn Any + Send>> {
-        #[cfg(windows)]
-        {
-            let driver: Box<dyn Reactor> =
-                Box::new(crate::net::iocp::Reactor::new().expect("Cannot construct driver"));
+        run_with_driver(default_reactor(), fut)
+    }
+}
 
-            with_reactor(&driver, || {
-                panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                    let rt = crate::rt::Runtime::new(driver.handle());
-                    rt.block_on(fut, &*driver);
-                }))
-            })
+fn run_with_driver(driver: Box<dyn Reactor>, fut: BlockFuture) -> Result<(), Box<dyn Any + Send>> {
+    with_reactor(&driver, || {
+        panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let rt = crate::rt::Runtime::new(driver.handle());
+            rt.block_on(fut, &*driver);
+        }))
+    })
+}
+
+fn default_reactor() -> Box<dyn Reactor> {
+    #[cfg(windows)]
+    {
+        Box::new(crate::net::iocp::Reactor::new().expect("Cannot construct driver"))
+    }
+
+    #[cfg(unix)]
+    {
+        #[cfg(feature = "neon-polling")]
+        {
+            Box::new(crate::net::polling::Reactor::new().expect("Cannot construct polling reactor"))
         }
 
-        #[cfg(unix)]
+        #[cfg(all(
+            target_os = "linux",
+            feature = "neon-uring",
+            not(feature = "neon-polling")
+        ))]
         {
-            #[cfg(feature = "neon-polling")]
-            {
-                let driver: Box<dyn Reactor> = Box::new(
-                    crate::net::polling::Reactor::new().expect("Cannot construct polling reactor"),
-                );
-
-                with_reactor(&driver, || {
-                    panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                        let rt = crate::rt::Runtime::new(driver.handle());
-                        rt.block_on(fut, &*driver);
-                    }))
-                })
-            }
-
-            #[cfg(all(
-                target_os = "linux",
-                feature = "neon-uring",
-                not(feature = "neon-polling")
-            ))]
-            {
-                // Asked for by name, so a failure is reported rather than
-                // quietly answered with a different driver. The kernel's
-                // reason is carried out: "cannot construct" on its own sends
-                // whoever hits it looking in the wrong place.
-                let driver: Box<dyn Reactor> = Box::new(
-                    crate::net::uring::Reactor::new(2048)
-                        .unwrap_or_else(|e| panic!("Cannot construct io-uring reactor: {e}")),
-                );
-
-                with_reactor(&driver, || {
-                    panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                        let rt = crate::rt::Runtime::new(driver.handle());
-                        rt.block_on(fut, &*driver);
-                    }))
-                })
-            }
-
-            // Reached when nothing was asked for, and also when io_uring was
-            // asked for on a platform that has none: the request cannot be
-            // honoured, and the alternative to picking a driver here is a
-            // build that does not compile at all.
-            #[cfg(all(
-                not(feature = "neon-polling"),
-                any(not(feature = "neon-uring"), not(target_os = "linux"))
-            ))]
-            {
-                // Nothing was asked for: prefer io_uring, fall back quietly.
-                #[cfg(target_os = "linux")]
-                let driver: Box<dyn Reactor> = match crate::net::uring::Reactor::new(2048) {
-                    Ok(reactor) => Box::new(reactor),
-                    Err(e) => {
-                        log::debug!("No io-uring reactor ({e}), using polling");
-                        Box::new(
-                            crate::net::polling::Reactor::new()
-                                .expect("Cannot construct polling reactor"),
-                        )
-                    }
-                };
-
-                #[cfg(not(target_os = "linux"))]
-                let driver: Box<dyn Reactor> = Box::new(
-                    crate::net::polling::Reactor::new().expect("Cannot construct polling reactor"),
-                );
-
-                with_reactor(&driver, || {
-                    panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                        let rt = crate::rt::Runtime::new(driver.handle());
-                        rt.block_on(fut, &*driver);
-                    }))
-                })
-            }
+            // Asked for by name, so a failure is reported rather than
+            // quietly answered with a different driver. The kernel's
+            // reason is carried out: "cannot construct" on its own sends
+            // whoever hits it looking in the wrong place.
+            Box::new(
+                crate::net::uring::Reactor::new(2048)
+                    .unwrap_or_else(|e| panic!("Cannot construct io-uring reactor: {e}")),
+            )
         }
+
+        // Reached when nothing was asked for, and also when io_uring was
+        // asked for on a platform that has none: the request cannot be
+        // honoured, and the alternative to picking a driver here is a
+        // build that does not compile at all.
+        #[cfg(all(
+            not(feature = "neon-polling"),
+            any(not(feature = "neon-uring"), not(target_os = "linux"))
+        ))]
+        {
+            // Nothing was asked for: prefer io_uring, fall back quietly.
+            #[cfg(target_os = "linux")]
+            let driver: Box<dyn Reactor> = match crate::net::uring::Reactor::new(2048) {
+                Ok(reactor) => Box::new(reactor),
+                Err(e) => {
+                    log::debug!("No io-uring reactor ({e}), using polling");
+                    Box::new(
+                        crate::net::polling::Reactor::new()
+                            .expect("Cannot construct polling reactor"),
+                    )
+                }
+            };
+
+            #[cfg(not(target_os = "linux"))]
+            let driver: Box<dyn Reactor> = Box::new(
+                crate::net::polling::Reactor::new().expect("Cannot construct polling reactor"),
+            );
+
+            driver
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completed_runtime_releases_current_reactor() {
+        for _ in 0..2 {
+            let driver: Box<dyn Reactor> = Box::new(polling::Reactor::new().unwrap());
+            assert!(!CURRENT_DRIVER.is_set());
+            let result = run_with_driver(
+                driver,
+                Box::pin(async {
+                    assert!(CURRENT_DRIVER.is_set());
+                    with_current(|reactor| reactor.handle().notify().unwrap());
+                }),
+            );
+            assert!(result.is_ok());
+            assert!(!CURRENT_DRIVER.is_set());
+        }
+    }
+
+    #[test]
+    fn reactor_scope_is_restored_after_unwind() {
+        let driver: Box<dyn Reactor> = Box::new(polling::Reactor::new().unwrap());
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            with_reactor(&driver, || panic!("test reactor unwind"));
+        }));
+        assert!(result.is_err());
+        assert!(!CURRENT_DRIVER.is_set());
+        with_reactor(&driver, || assert!(CURRENT_DRIVER.is_set()));
+        assert!(!CURRENT_DRIVER.is_set());
+    }
+
+    #[test]
+    fn nested_reactor_is_rejected_without_replacing_outer_scope() {
+        let driver: Box<dyn Reactor> = Box::new(polling::Reactor::new().unwrap());
+        with_reactor(&driver, || {
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                with_reactor(&driver, || {});
+            }));
+            assert!(result.is_err());
+            assert!(CURRENT_DRIVER.is_set());
+        });
+        assert!(!CURRENT_DRIVER.is_set());
     }
 }
