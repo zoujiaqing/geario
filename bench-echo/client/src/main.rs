@@ -4,8 +4,8 @@
 //! depends on the async runtime under test.
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 fn main() {
@@ -16,37 +16,42 @@ fn main() {
     let payload: usize = args.next().and_then(|v| v.parse().ok()).unwrap_or(128);
 
     let stop = Arc::new(AtomicBool::new(false));
-    let total = Arc::new(AtomicU64::new(0));
+    let barrier = Arc::new(std::sync::Barrier::new(conns + 1));
     let mut latencies: Vec<Vec<u64>> = Vec::new();
     let mut handles = Vec::new();
 
-    for _ in 0..conns {
-        let addr = addr.clone();
-        let stop = stop.clone();
-        let total = total.clone();
-        handles.push(std::thread::spawn(move || {
-            let mut sock = TcpStream::connect(&addr).expect("connect");
+    let sockets: Vec<_> = (0..conns)
+        .map(|_| {
+            let sock = TcpStream::connect(&addr).expect("connect");
             sock.set_nodelay(true).unwrap();
+            sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            sock.set_write_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            sock
+        })
+        .collect();
+    for mut sock in sockets {
+        let stop = stop.clone();
+        let barrier = barrier.clone();
+        handles.push(std::thread::spawn(move || {
             let out = vec![b'x'; payload];
             let mut buf = vec![0u8; payload];
             let mut lat = Vec::with_capacity(1 << 16);
 
+            barrier.wait();
             while !stop.load(Ordering::Relaxed) {
                 let t = Instant::now();
-                if sock.write_all(&out).is_err() {
-                    break;
-                }
-                if sock.read_exact(&mut buf).is_err() {
-                    break;
-                }
+                sock.write_all(&out).expect("echo write");
+                sock.read_exact(&mut buf).expect("echo read");
+                assert_eq!(buf, out, "echo data mismatch");
                 lat.push(t.elapsed().as_nanos() as u64);
-                total.fetch_add(1, Ordering::Relaxed);
             }
             lat
         }));
     }
 
     let start = Instant::now();
+    barrier.wait();
     std::thread::sleep(Duration::from_secs(secs));
     stop.store(true, Ordering::Relaxed);
     for h in handles {
@@ -64,7 +69,8 @@ fn main() {
         all[((n as f64 * p) as usize).min(n - 1)] as f64 / 1000.0
     };
 
-    let count = total.load(Ordering::Relaxed);
+    let count = n;
+    assert!(count > 0, "no completed echo requests");
     println!("target      {addr}");
     println!("conns       {conns}");
     println!("payload     {payload} bytes");

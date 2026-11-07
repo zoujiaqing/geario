@@ -11,7 +11,14 @@ async fn main() -> io::Result<()> {
     // happens to be running.
     let addr = std::env::var("BENCH_ADDR").unwrap_or_else(|_| "127.0.0.1:18080".into());
 
-    geario::server::net::build()
+    let mut server = geario::server::net::build();
+    if let Ok(workers) = std::env::var("BENCH_WORKERS") {
+        let workers = workers
+            .parse::<std::num::NonZeroUsize>()
+            .map_err(io::Error::other)?;
+        server = server.workers(workers.get());
+    }
+    server
         .bind("echo", addr, SharedCfg::new("ECHO"), async |_| {
             fn_service(async |io: Io| {
                 let codec = BytesCodec;

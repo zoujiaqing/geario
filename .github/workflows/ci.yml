@@ -82,6 +82,7 @@ jobs:
       - name: check
         run: |
           set -e
+          cargo check -p geario --no-default-features --features rustls --lib
           for f in "" "trace" "rustls" "rustls-ring" "simd" \
                    "neon-polling" "neon-uring" "neon-polling,neon-uring" \
                    "neon-polling,rustls" "neon-uring,rustls,trace,simd"; do

@@ -1,0 +1,31 @@
+name: Linux runtime comparison
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/runtime-benchmark.yml'
+      - 'bench-runtime/**'
+
+permissions:
+  contents: read
+
+jobs:
+  echo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare geario and Tokio over TCP loopback
+        run: |
+          sudo prlimit --pid $$ --memlock=unlimited:unlimited 2>/dev/null || true
+          bash bench-runtime/compare.sh "$RUNNER_TEMP/runtime-benchmark"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-runtime-comparison
+          path: |
+            ${{ runner.temp }}/runtime-benchmark/*.txt
+            ${{ runner.temp }}/runtime-benchmark/*.log
+            ${{ runner.temp }}/runtime-benchmark/*.sha256

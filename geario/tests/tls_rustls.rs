@@ -41,17 +41,16 @@ async fn handshake_then_echo() {
     let _ = tls_rustls::crypto::aws_lc_rs::default_provider().install_default();
     let pki = issue("localhost");
 
-    let server_cfg = Arc::new(
-        ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(vec![pki.cert_der.clone()], pki.key_der.clone_key())
-            .expect("server config"),
-    );
+    let mut server_cfg = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![pki.cert_der.clone()], pki.key_der.clone_key())
+        .expect("server config");
+    server_cfg.alpn_protocols = vec![b"custom-h2".to_vec()];
 
     let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = lst.local_addr().unwrap();
 
-    let acceptor_cfg = server_cfg.clone();
+    let acceptor_cfg = Arc::new(server_cfg);
     geario::rt::spawn(async move {
         let accepted = geario::rt::spawn_blocking(move || lst.accept()).await;
         let Ok(Ok((stream, _))) = accepted else {
@@ -76,19 +75,28 @@ async fn handshake_then_echo() {
 
     let mut roots = RootCertStore::empty();
     roots.add(pki.ca_der.clone()).unwrap();
-    let client_cfg = Arc::new(
-        ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth(),
-    );
+    let mut client_cfg = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    client_cfg.alpn_protocols = vec![b"custom-h2".to_vec()];
 
     let io = geario::net::tcp_connect(addr, SharedCfg::new("TLS-CLI").into())
         .await
         .expect("connect");
     let host = ServerName::try_from("localhost").unwrap();
-    let io = TlsClientFilter::create(io, client_cfg, host)
+    let io = TlsClientFilter::create(io, Arc::new(client_cfg), host)
         .await
         .expect("tls handshake");
+
+    assert_eq!(
+        io.query::<geario::tls::AlpnProtocol>().as_ref().unwrap().0,
+        b"custom-h2"
+    );
+    #[cfg(feature = "http-compat")]
+    assert_eq!(
+        io.query::<geario::io::types::HttpProtocol>().get(),
+        Some(geario::io::types::HttpProtocol::Unknown)
+    );
 
     let codec = BytesCodec;
     io.send(geario::bytes::Bytes::from_static(b"over tls"), &codec)
@@ -161,15 +169,6 @@ async fn handshake_rejects_an_untrusted_chain() {
 /// A server that has ALPN configured refuses a client with no protocol in
 /// common. The client has to be told that in an alert, not left with an EOF:
 /// "no common protocol" and "the network dropped" are different problems.
-// Flaky on loaded macOS CI: over loopback the connection teardown races the
-// alert, and either side can see a reset or a broken pipe before it reads the
-// alert, so the failure surfaces as a transport error rather than the rustls
-// one. It is reliable on Linux, Windows, and a quiet macOS host. Making it
-// deterministic needs a way to reproduce the race; ignored on macOS until then.
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "flaky: teardown races the alert on loaded macOS CI"
-)]
 #[geario::test]
 async fn a_client_with_no_common_alpn_protocol_is_told_so() {
     let _ = tls_rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -184,16 +183,25 @@ async fn a_client_with_no_common_alpn_protocol_is_told_so() {
 
     let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = lst.local_addr().unwrap();
-    geario::rt::spawn(async move {
-        let accepted = geario::rt::spawn_blocking(move || lst.accept()).await;
-        let Ok(Ok((stream, _))) = accepted else {
-            return;
-        };
-        stream.set_nonblocking(true).ok();
-        let Ok(io) = geario::net::from_tcp_stream(stream, SharedCfg::new("TLS-SRV").into()) else {
-            return;
-        };
-        let _ = TlsServerFilter::create(io, server_cfg, geario::util::time::Millis(5_000)).await;
+    let server = geario::rt::spawn(async move {
+        let (stream, _) = geario::rt::spawn_blocking(move || lst.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        let io = geario::net::from_tcp_stream(stream, SharedCfg::new("TLS-SRV").into()).unwrap();
+        let error = TlsServerFilter::create(io, server_cfg, geario::util::time::Millis(5_000))
+            .await
+            .err()
+            .expect("server accepted incompatible ALPN");
+        assert!(
+            matches!(
+                error
+                    .get_ref()
+                    .and_then(|e| e.downcast_ref::<tls_rustls::Error>()),
+                Some(tls_rustls::Error::NoApplicationProtocol)
+            ),
+            "{error}"
+        );
     });
 
     let mut roots = RootCertStore::empty();
@@ -207,10 +215,14 @@ async fn a_client_with_no_common_alpn_protocol_is_told_so() {
         .await
         .expect("connect");
     let host = ServerName::try_from("localhost").unwrap();
-    let err = TlsClientFilter::create(io, Arc::new(client_cfg), host)
-        .await
-        .err()
-        .expect("the handshake succeeded with no protocol in common");
+    let err = geario::util::time::timeout(
+        geario::util::time::Millis(6_000),
+        TlsClientFilter::create(io, Arc::new(client_cfg), host),
+    )
+    .await
+    .expect("client did not receive an ALPN alert")
+    .err()
+    .expect("the handshake succeeded with no protocol in common");
 
     let rustls_err = err
         .get_ref()
@@ -223,4 +235,5 @@ async fn a_client_with_no_common_alpn_protocol_is_told_so() {
         ),
         "{rustls_err:?}"
     );
+    server.await.unwrap();
 }

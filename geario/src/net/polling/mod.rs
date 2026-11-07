@@ -2,6 +2,9 @@ mod connect;
 mod io;
 mod reactor;
 mod stream;
+mod udp;
+
+pub use self::udp::UdpSocket;
 
 pub use self::reactor::{Handler, Reactor, ReactorApi};
 pub use geario_polling::{Event, PollMode};

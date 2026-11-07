@@ -38,6 +38,10 @@ thread_local! {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PskIdentity(pub Vec<u8>);
 
+/// The negotiated TLS application protocol, as opaque ALPN bytes.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AlpnProtocol(pub Vec<u8>);
+
 /// The TLS SNI server name (DNS).
 ///
 /// Used in conjunction with [`crate::io::Filter::query`]:

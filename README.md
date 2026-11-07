@@ -89,3 +89,15 @@ MIT OR Apache-2.0, matching upstream ntex. See `NOTICE` for attribution.
 ## Documentation
 
 - [中文说明](README.zh-Hans.md)
+
+### Protocol-independent use
+
+Disable default features to omit the HTTP URI connector and the legacy
+HTTP-specific TLS query. With `rustls`, query `geario::tls::AlpnProtocol`
+for the negotiated bytes and interpret them in the application protocol.
+
+On macOS and Linux, `geario::net::UdpSocket` supports asynchronous
+`recv_from` and `send_to` on the polling reactor. Select `neon-polling`
+explicitly on Linux when using UDP. The io_uring backend currently returns
+`Unsupported` for UDP. The datagram API preserves message boundaries
+and supports a pending read and write on separate tasks on the same worker.

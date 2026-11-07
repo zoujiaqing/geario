@@ -5,6 +5,7 @@ mod error;
 mod message;
 mod resolve;
 mod service;
+#[cfg(feature = "http-compat")]
 mod uri;
 
 pub use self::error::ConnectError;

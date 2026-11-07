@@ -345,6 +345,7 @@ impl Handler for StreamOpsHandler {
                     iovecs: _,
                 } => {
                     if let Some(item) = st.streams.get_mut(id) {
+                        stats::inc(&stats::WRITE_CANCELS);
                         item.ctx.with_write_buf(|wrt| {
                             for page in pages.into_iter().rev() {
                                 if !page.is_empty() {
@@ -974,5 +975,90 @@ mod send_config_tests {
         );
         assert_eq!(SendConfig::parse(Some("0"), None).zc_size, 0);
         assert_eq!(SendConfig::parse(Some("invalid"), None).zc_size, 1536);
+    }
+}
+
+#[cfg(all(test, feature = "neon-uring", not(feature = "neon-polling")))]
+mod write_cancel_tests {
+    use super::*;
+    use crate::service::cfg::SharedCfg;
+    use crate::util::time::{Millis, sleep, timeout};
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+
+    #[crate::test]
+    async fn canceled_writev_requeues_every_byte_before_later_writes() {
+        let (mut writer, mut reader) = UnixStream::pair().unwrap();
+        writer.set_nonblocking(true).unwrap();
+        socket2::SockRef::from(&writer)
+            .set_send_buffer_size(8192)
+            .unwrap();
+        // Fill the socket before handing it to the reactor. The peer cannot
+        // drain it until the actual cancellation CQE has been observed.
+        let mut filled = 0;
+        loop {
+            match writer.write(&[0x55; 4096]) {
+                Ok(n) => filled += n,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) => panic!("{e}"),
+            }
+        }
+        let io = crate::net::from_unix_stream(writer, SharedCfg::new("CANCEL").into()).unwrap();
+        let ops: StreamOps = Arbiter::get_value(|| panic!("missing io_uring stream handler"));
+        let bytes: Vec<_> = (0..32768_u32).map(|n| (n ^ (n >> 8)) as u8).collect();
+        io.get_ref()
+            .with_write_buf(|buf| buf.extend_from_slice(&bytes))
+            .unwrap();
+        let (id, op) = ops.0.with(|st| {
+            let id = st.streams.iter().next().unwrap().0;
+            st.send(id, &ops.0.api);
+            let op = st.streams[id].wr_op.unwrap();
+            assert!(matches!(
+                st.ops[op.get() as usize],
+                Some(Operation::Writev { .. })
+            ));
+            st.streams[id].flags.insert(Flags::WR_CANCELING);
+            (id, op)
+        });
+        io.get_ref()
+            .with_write_buf(|buf| buf.extend_from_slice(b"after"))
+            .unwrap();
+
+        let before = stats::write_path().2;
+        timeout(Millis(2000), async {
+            loop {
+                if stats::write_path().2 != before {
+                    break;
+                }
+                ops.0.with(|st| assert_eq!(st.streams[id].wr_op, Some(op)));
+                ops.0.api.cancel(op.get());
+                sleep(Millis(10)).await;
+            }
+        })
+        .await
+        .expect("Writev did not return ECANCELED");
+
+        let mut expected = vec![0x55; filled];
+        expected.extend_from_slice(&bytes);
+        expected.extend_from_slice(b"after");
+        reader
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let receive = crate::rt::spawn_blocking(move || {
+            let mut actual = vec![0; expected.len()];
+            reader.read_exact(&mut actual).unwrap();
+            assert!(
+                actual == expected,
+                "canceled bytes were lost, reordered or duplicated"
+            );
+        });
+        timeout(Millis(4000), async {
+            io.flush(true).await.unwrap();
+            io.shutdown().await.unwrap();
+            receive.await.unwrap();
+        })
+        .await
+        .expect("reissued write did not finish");
     }
 }

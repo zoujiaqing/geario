@@ -19,7 +19,8 @@ path = "src/lib.rs"
 workspace = true
 
 [features]
-default = []
+default = ["http-compat"]
+http-compat = ["dep:http"]
 # The bytes benchmarks use the unstable `test` crate. Declaring them behind
 # a feature keeps `cargo check --all-targets` working on stable, which is
 # what this project pins, without deleting them.
@@ -44,7 +45,7 @@ bitflags = { workspace = true }
 cfg-if = { workspace = true }
 core_affinity = { workspace = true }
 uuid = { workspace = true }
-http = { workspace = true }
+http = { workspace = true, optional = true }
 tls_rustls = { workspace = true, optional = true }
 geario-polling = { workspace = true }
 socket2 = { workspace = true, features = ["all"] }

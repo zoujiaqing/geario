@@ -2,7 +2,9 @@ use std::task::Poll;
 use std::{any, cell::RefCell, io, io::Write, ops::Deref, ops::DerefMut};
 
 use crate::bytes::{BufMut, BytePages};
-use crate::io::{FilterBuf, Io, types};
+#[cfg(feature = "http-compat")]
+use crate::io::types;
+use crate::io::{FilterBuf, Io};
 use tls_rustls::{ConnectionCommon, SideData};
 
 use super::{PeerCert, PeerCertChain};
@@ -23,21 +25,21 @@ where
     SD: SideData,
 {
     pub(crate) fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
-        const H2: &[u8] = b"h2";
-
+        if id == any::TypeId::of::<crate::tls::AlpnProtocol>() {
+            return self.session.alpn_protocol().map(|protocol| {
+                Box::new(crate::tls::AlpnProtocol(protocol.to_vec())) as Box<dyn any::Any>
+            });
+        }
+        #[cfg(feature = "http-compat")]
         if id == any::TypeId::of::<types::HttpProtocol>() {
-            let h2 = self
-                .session
-                .alpn_protocol()
-                .is_some_and(|protos| protos.windows(2).any(|w| w == H2));
-
-            let proto = if h2 {
-                types::HttpProtocol::Http2
-            } else {
-                types::HttpProtocol::Http1
+            let proto = match self.session.alpn_protocol() {
+                Some(b"h2") => types::HttpProtocol::Http2,
+                None | Some(b"http/1.1") => types::HttpProtocol::Http1,
+                Some(_) => types::HttpProtocol::Unknown,
             };
-            Some(Box::new(proto))
-        } else if id == any::TypeId::of::<PeerCert<'_>>() {
+            return Some(Box::new(proto));
+        }
+        if id == any::TypeId::of::<PeerCert<'_>>() {
             if let Some(cert_chain) = self.session.peer_certificates() {
                 if let Some(cert) = cert_chain.first() {
                     Some(Box::new(PeerCert(cert.to_owned())))
@@ -102,11 +104,16 @@ where
         // Write the alert out and close gracefully with the reason attached;
         // the handshake helper and `Io::recv` report it from there.
         let result = match result {
-            Err(err)
-                if err
-                    .get_ref()
-                    .is_some_and(|inner| inner.is::<tls_rustls::Error>()) =>
-            {
+            Err(err) if err.get_ref().is_some_and(|e| e.is::<tls_rustls::Error>()) => {
+                // A peer's fatal alert is terminal. Attempting a graceful
+                // reply can replace it with a broken pipe if the peer closes.
+                if matches!(
+                    err.get_ref()
+                        .and_then(|e| e.downcast_ref::<tls_rustls::Error>()),
+                    Some(tls_rustls::Error::AlertReceived(_))
+                ) {
+                    return Err(err);
+                }
                 let _ = self.write_tls_records(buf);
                 buf.io().close_with(err);
                 return Ok(());

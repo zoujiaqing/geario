@@ -1,0 +1,31 @@
+[workspace]
+
+[package]
+name = "bench-runtime"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[features]
+polling = ["geario/neon-polling"]
+uring = ["geario/neon-uring"]
+
+[dependencies]
+geario = { path = "../geario", default-features = false }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt"] }
+
+[[bin]]
+name = "echo-geario"
+path = "../bench-echo/server-geario/src/main.rs"
+
+[[bin]]
+name = "echo-client"
+path = "../bench-echo/client/src/main.rs"
+
+[[bin]]
+name = "echo-tokio"
+path = "src/tokio.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1

@@ -69,6 +69,12 @@ impl ReactorApi {
         }
     }
 
+    pub(super) fn attach_udp(&self, fd: RawFd, id: u32) -> io::Result<()> {
+        let key = (u64::from(id) | self.batch) as usize;
+        // The datagram wrapper detaches this fd before dropping the socket.
+        unsafe { self.poll.add(fd, Event::none(key)) }
+    }
+
     /// Detach an fd from the driver.
     pub fn detach(&self, fd: RawFd, id: u32) {
         if let Err(err) = self.poll.delete(unsafe { BorrowedFd::borrow_raw(fd) }) {
@@ -213,6 +219,10 @@ impl fmt::Debug for Reactor {
 }
 
 impl crate::net::Reactor for Reactor {
+    fn from_udp_socket(&self, socket: net::UdpSocket) -> io::Result<super::UdpSocket> {
+        super::UdpSocket::register(self, socket)
+    }
+
     fn tcp_connect(&self, addr: net::SocketAddr, cfg: SharedCfg) -> Receiver<Io> {
         let addr = SockAddr::from(addr);
         let result = Socket::new(addr.domain(), Type::STREAM, Some(Protocol::TCP))

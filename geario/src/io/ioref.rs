@@ -73,12 +73,8 @@ impl IoRef {
     /// needs this today.
     #[cfg(feature = "rustls")]
     pub(crate) fn close_with(&self, err: io::Error) {
-        if self.0.error.take().is_none() {
-            self.0.error.set(Some(err));
-        } else {
-            // The first reason stands.
-            self.0.error.set(self.0.error.take());
-        }
+        let first = self.0.error.take();
+        self.0.error.set(first.or(Some(err)));
         self.0.start_shutdown();
     }
 
