@@ -25,12 +25,35 @@ async fn main() -> io::Result<()> {
             .map_err(io::Error::other)?;
         cfg = cfg.add(IoConfig::default().set_read_buf(capacity.get(), 536, 128));
     }
+    let segments = match std::env::var("BENCH_SEGMENTS").as_deref() {
+        Ok("vectored") => Some(false),
+        Ok("serial") => Some(true),
+        Err(std::env::VarError::NotPresent) => None,
+        _ => {
+            return Err(io::Error::other(
+                "BENCH_SEGMENTS must be vectored or serial",
+            ));
+        }
+    };
     let direct = std::env::var_os("BENCH_DIRECT_WRITE").is_some();
     server
         .bind("echo", addr, cfg, async move |_| {
             fn_service(async move |io: Io| {
                 let codec = BytesCodec;
                 while let Ok(Some(mut item)) = io.recv(&codec).await {
+                    if let Some(serial) = segments {
+                        while !item.is_empty() {
+                            let chunk = item.split_to(item.len().min(16 * 1024));
+                            io.get_ref().encode_bytes(chunk)?;
+                            if serial {
+                                io.flush(true).await?;
+                            }
+                        }
+                        if !serial {
+                            io.flush(true).await?;
+                        }
+                        continue;
+                    }
                     if direct {
                         let n = io
                             .get_ref()
