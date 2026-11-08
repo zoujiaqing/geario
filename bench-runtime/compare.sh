@@ -124,7 +124,7 @@ if [[ $mode == diagnose ]]; then
     rounds=5
 elif [[ $mode == verify ]]; then
     names=(base uring tokio)
-    sizes=(128 16384)
+    sizes=(128 16384 65536)
     rounds=9
 else
     names=(polling uring tokio)

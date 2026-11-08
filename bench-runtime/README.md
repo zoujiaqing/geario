@@ -22,7 +22,7 @@ The workflow also supports two manual modes:
   in separate instrumented runs.
 - `verify` builds the selected ref and a pinned baseline on the same runner,
   using identical benchmark sources and dependency locks. It compares both
-  builds and Tokio in nine rotated rounds at 128 B and 16 KiB. The CI summary
+  builds and Tokio in nine rotated rounds at 128 B, 16 KiB and 64 KiB. The CI summary
   reports medians and the median per-round ratio against the baseline.
 
 The [16 KiB diagnosis](https://github.com/zoujiaqing/geario/actions/runs/42456488002)
