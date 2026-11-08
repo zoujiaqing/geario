@@ -50,6 +50,11 @@ jobs:
         run: |
           sudo prlimit --pid $$ --memlock=unlimited:unlimited 2>/dev/null || true
           bash bench-runtime/compare.sh "$RUNNER_TEMP/runtime-benchmark"
+          reference=tokio
+          if [ "$BENCH_MODE" = verify ]; then reference=base; fi
+          if [ "$BENCH_MODE" = diagnose ]; then reference=uring; fi
+          python3 bench-runtime/summarize.py "$RUNNER_TEMP/runtime-benchmark" \
+            --reference "$reference" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
