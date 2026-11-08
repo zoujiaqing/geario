@@ -113,6 +113,11 @@ const IORING_RECVSEND_POLL_FIRST: u16 = 1;
 const MAX_WRITE_ITEMS: usize = 16;
 const MAX_WRITE_SIZE: usize = 64 * 1024;
 
+// A bounded synchronous attempt avoids a send SQE and completion for a
+// medium single page. Keep small writes and larger batches on their paths.
+const DIRECT_SEND_MIN: usize = 8 * 1024;
+const DIRECT_SEND_MAX: usize = 16 * 1024;
+
 // Build the final owning container before any iovec pointers are taken.
 // The byte budget is a stopping threshold, not a hard cap: the final whole
 // page can cross it, preserving the existing page and short-write semantics.
@@ -643,14 +648,31 @@ impl StreamOpsStorage {
         // No allocation for a single page. Once a second page exists, build
         // the final owning Vec directly; its heap storage stays stable while
         // the operation is in flight, even if the operation slab moves.
-        let (single, pages) = item
-            .ctx
-            .with_write_buf(|wrt| gather_pages(wrt, config.max_write_items));
+        let (single, pages, queued) = item.ctx.with_write_buf(|wrt| {
+            let (single, pages) = gather_pages(wrt, config.max_write_items);
+            let queued = single.is_some() && !wrt.is_empty();
+            (single, pages, queued)
+        });
 
         match single {
             None if pages.is_empty() => {}
-            Some(buf) => {
-                // Single page keeps the existing send / zero-copy choice.
+            Some(mut buf) => {
+                let direct = (DIRECT_SEND_MIN..=DIRECT_SEND_MAX).contains(&buf.len()) && !queued;
+                if direct {
+                    match item.send_nonblocking(&buf) {
+                        Ok(written) if written == buf.len() => {
+                            item.ctx.update_write_status(Ok(true));
+                            return;
+                        }
+                        Ok(written) => buf.advance_to(written),
+                        Err(err) => {
+                            item.ctx.update_write_status(Err(err));
+                            return;
+                        }
+                    }
+                }
+                // A blocked or partial direct send leaves exactly the unsent
+                // suffix for the ring. Keep it plain to avoid an extra CQE.
                 #[cfg(feature = "trace")]
                 log::trace!("{}: Snd({id}) size:{:?}", item.ctx.tag(), buf.len());
                 let op_id = self.ops.insert(Some(Operation::Send {
@@ -667,7 +689,7 @@ impl StreamOpsStorage {
                         unreachable!()
                     };
                 api.submit_inline(op_id, move |entry| {
-                    if item.flags.contains(Flags::NO_ZC) || buf_len <= config.zc_size {
+                    if direct || item.flags.contains(Flags::NO_ZC) || buf_len <= config.zc_size {
                         opcode2::Send::with(entry, item.fd()).buffer(buf_ptr, buf_len);
                     } else {
                         opcode2::SendZc::with(entry, item.fd()).buffer(buf_ptr, buf_len);
@@ -775,6 +797,22 @@ impl StreamItem {
 
     fn tag(&self) -> &'static str {
         self.ctx.tag()
+    }
+
+    fn send_nonblocking(&self, buf: &[u8]) -> io::Result<usize> {
+        let result = crate::syscall!(
+            break libc::send(
+                self.io.as_raw_fd(),
+                buf.as_ptr().cast(),
+                buf.len(),
+                libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL,
+            )
+        )?;
+        match result {
+            std::task::Poll::Ready(0) => Err(io::Error::from(io::ErrorKind::WriteZero)),
+            std::task::Poll::Ready(n) => Ok(n),
+            std::task::Poll::Pending => Ok(0),
+        }
     }
 
     /// Write `bufs` to the socket now, outside the ring.
@@ -979,13 +1017,63 @@ mod send_config_tests {
 }
 
 #[cfg(all(test, feature = "neon-uring", not(feature = "neon-polling")))]
-mod write_cancel_tests {
+mod write_path_tests {
     use super::*;
     use crate::service::cfg::SharedCfg;
     use crate::util::time::{Millis, sleep, timeout};
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
+
+    #[crate::test]
+    async fn short_direct_send_submits_only_the_unsent_suffix() {
+        let (writer, mut reader) = UnixStream::pair().unwrap();
+        socket2::SockRef::from(&writer)
+            .set_send_buffer_size(4096)
+            .unwrap();
+        let io = crate::net::from_unix_stream(writer, SharedCfg::new("DIRECT").into()).unwrap();
+        let ops: StreamOps = Arbiter::get_value(|| panic!("missing io_uring stream handler"));
+        let bytes: Vec<_> = (0..DIRECT_SEND_MAX).map(|n| (n ^ (n >> 8)) as u8).collect();
+        io.get_ref()
+            .encode_bytes(crate::bytes::Bytes::copy_from_slice(&bytes))
+            .unwrap();
+
+        ops.0.with(|st| {
+            let id = st.streams.iter().next().unwrap().0;
+            st.send(id, &ops.0.api);
+            let op = st.streams[id].wr_op.unwrap();
+            let Some(Operation::Send { buf, .. }) = &st.ops[op.get() as usize] else {
+                panic!("expected a single send for the remaining bytes");
+            };
+            assert!(
+                !buf.is_empty() && buf.len() < bytes.len(),
+                "expected a short write"
+            );
+            assert_eq!(&buf[..], &bytes[bytes.len() - buf.len()..]);
+        });
+
+        io.get_ref().encode_bytes(&b"after"[..]).unwrap();
+        let mut expected = bytes;
+        expected.extend_from_slice(b"after");
+        reader
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let receive = crate::rt::spawn_blocking(move || {
+            let mut actual = vec![0; expected.len()];
+            reader.read_exact(&mut actual).unwrap();
+            assert!(
+                actual == expected,
+                "short write lost, reordered or duplicated bytes"
+            );
+        });
+        timeout(Millis(4000), async {
+            io.flush(true).await.unwrap();
+            io.shutdown().await.unwrap();
+            receive.await.unwrap();
+        })
+        .await
+        .expect("buffered suffix did not finish");
+    }
 
     #[crate::test]
     async fn canceled_writev_requeues_every_byte_before_later_writes() {
