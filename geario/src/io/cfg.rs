@@ -306,6 +306,13 @@ impl BufConfig {
     }
 
     #[cfg(target_os = "linux")]
+    pub(crate) fn take_cached_read_burst(&self) -> Option<BytesMut> {
+        self.recycle_read_page
+            .then(|| BytesMut::take_cached_page(BytePageSize::Size64))
+            .flatten()
+    }
+
+    #[cfg(target_os = "linux")]
     pub(crate) fn resize_read_burst(&self, buf: &mut BytesMut) {
         if self.recycle_read_page
             && buf.capacity() == DEFAULT_READ_HIGH

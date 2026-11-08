@@ -90,6 +90,11 @@ impl BytesMut {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn take_cached_page(size: crate::bytes::BytePageSize) -> Option<Self> {
+        StorageVec::take_cached(size).map(|storage| Self { storage })
+    }
+
     /// Creates a new `BytesMut` from slice, by copying it.
     #[inline]
     #[must_use]

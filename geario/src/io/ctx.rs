@@ -66,18 +66,31 @@ impl IoContext {
 
     /// Gets the read buffer.
     pub fn get_read_buf(&self) -> BytesMut {
+        self.get_read_buf_or(|| self.st().get_read_buf())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn get_read_buf_for_burst(&self) -> BytesMut {
+        self.get_read_buf_or(|| {
+            self.0
+                .cfg()
+                .read_buf()
+                .take_cached_read_burst()
+                .unwrap_or_else(|| self.st().get_read_buf())
+        })
+    }
+
+    fn get_read_buf_or(&self, fresh: impl FnOnce() -> BytesMut) -> BytesMut {
         let st = self.st();
 
-        if st.flags.is_read_ready() {
-            // The dispatcher has not consumed the read buffer yet,
-            // so we must not modify it.
-            st.get_read_buf()
-        } else if let Some(mut buf) = st.buffer.get_read_buf() {
+        if !st.flags.is_read_ready()
+            && let Some(mut buf) = st.buffer.get_read_buf()
+        {
             self.0.resize_read_buf(&mut buf);
-            buf
-        } else {
-            st.get_read_buf()
+            return buf;
         }
+        // Never reclaim bytes the dispatcher has not consumed.
+        fresh()
     }
 
     /// Resizes the read buffer.

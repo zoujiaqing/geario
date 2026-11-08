@@ -42,19 +42,21 @@ impl StorageVec {
 
     /// Create new empty storage with specified size category
     pub(crate) fn sized(size: BytePageSize) -> StorageVec {
+        Self::take_cached(size)
+            .unwrap_or_else(|| StorageVec(SharedVec::create(size, size.capacity(), &[])))
+    }
+
+    pub(crate) fn take_cached(size: BytePageSize) -> Option<Self> {
         CACHE.with(|c| {
             let mut cst = c.take().unwrap();
             let item = cst.cache[size as usize].pop();
             c.set(Some(cst));
-
-            if let Some(mut item) = item {
+            item.map(|mut item| {
                 unsafe {
                     item.as_inner().size = size;
                 }
                 item
-            } else {
-                StorageVec(SharedVec::create(size, size.capacity(), &[]))
-            }
+            })
         })
     }
 

@@ -1,6 +1,6 @@
 use std::{cell::Cell, cmp, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc};
 
-use crate::bytes::{BufMut, BytePage, BytePages, BytesMut};
+use crate::bytes::{BufMut, BytePage, BytePageSize, BytePages, BytesMut};
 use crate::io::{IoContext, IoTaskStatus};
 use crate::rt::Arbiter;
 use crate::util::channel::pool;
@@ -106,6 +106,9 @@ impl SendConfig {
 }
 const IORING_RECVSEND_POLL_FIRST: u16 = 1;
 
+// Limit the extra capacity held by idle receives on a worker.
+const MAX_STREAMS_FOR_READ_AHEAD: usize = 64;
+
 /// Most pages gathered into one vectored send, and the byte ceiling for it.
 /// Mirrors the polling driver: one `writev` covers a whole response instead
 /// of one `send` per page, which is what let a multi-page response serialize
@@ -154,6 +157,7 @@ struct StreamItem {
     flags: Flags,
     rd_op: Option<NonZeroU32>,
     wr_op: Option<NonZeroU32>,
+    recent_read_burst: bool,
     ctx: IoContext,
 }
 
@@ -274,6 +278,7 @@ impl StreamOps {
             ctx,
             rd_op: None,
             wr_op: None,
+            recent_read_burst: false,
             flags,
         };
 
@@ -424,6 +429,8 @@ impl Handler for StreamOpsHandler {
                                 st.recv_more(id, buf, &self.inner.api);
                             } else {
                                 item.flags.remove(Flags::RD_MORE);
+                                item.recent_read_burst =
+                                    buf.len() >= BytePageSize::Size64.capacity();
                                 if item.ctx.update_read_status(buf, res) == IoTaskStatus::Io {
                                     st.recv(id, self.inner.api.is_new(), &self.inner.api);
                                 }
@@ -587,12 +594,17 @@ impl Handler for StreamOpsHandler {
 
 impl StreamOpsStorage {
     fn recv(&mut self, id: usize, poll_first: bool, api: &ReactorApi) {
+        let room_for_burst = self.streams.len() <= MAX_STREAMS_FOR_READ_AHEAD;
         if let Some(item) = self.streams.get_mut(id) {
             if item.rd_op.is_none() {
                 #[cfg(feature = "trace")]
                 log::trace!("{}: Rcv({id})", item.ctx.tag());
 
-                let mut buf = item.ctx.get_read_buf();
+                let mut buf = if item.recent_read_burst && room_for_burst {
+                    item.ctx.get_read_buf_for_burst()
+                } else {
+                    item.ctx.get_read_buf()
+                };
                 if !buf.is_empty() {
                     // These are bytes the consumer has not taken yet. This
                     // driver holds the buffer it submits until the read
