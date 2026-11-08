@@ -306,7 +306,7 @@ impl BufConfig {
     }
 
     #[cfg(target_os = "linux")]
-    pub(crate) fn resize_read_burst(&self, buf: &mut BytesMut) {
+    pub(crate) fn resize_read_burst(&self, buf: &mut BytesMut) -> bool {
         if self.recycle_read_page
             && buf.capacity() == DEFAULT_READ_HIGH
             && buf.remaining_mut() < self.low
@@ -317,8 +317,10 @@ impl BufConfig {
             let mut burst = BytesMut::with_page_size(BytePageSize::Size64);
             burst.extend_from_slice(buf);
             *buf = burst;
+            true
         } else {
             self.resize(buf);
+            false
         }
     }
 
@@ -405,7 +407,7 @@ mod tests {
         let cfg = default.read_buf();
         let mut page = cfg.get();
         page.resize(DEFAULT_READ_HIGH, 0x5a);
-        cfg.resize_read_burst(&mut page);
+        assert!(cfg.resize_read_burst(&mut page));
         assert_eq!(page.capacity(), BytePageSize::Size64.capacity());
         assert_eq!(page.len(), DEFAULT_READ_HIGH);
         assert!(page.iter().all(|&byte| byte == 0x5a));
@@ -414,7 +416,7 @@ mod tests {
         let cfg = custom.read_buf();
         let mut page = cfg.get();
         page.resize(DEFAULT_READ_HIGH, 0xa5);
-        cfg.resize_read_burst(&mut page);
+        assert!(!cfg.resize_read_burst(&mut page));
         assert_eq!(page.capacity(), DEFAULT_READ_HIGH * 2);
         assert_eq!(page.len(), DEFAULT_READ_HIGH);
         assert!(page.iter().all(|&byte| byte == 0xa5));

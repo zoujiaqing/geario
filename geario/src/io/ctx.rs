@@ -86,8 +86,8 @@ impl IoContext {
     }
 
     #[cfg(target_os = "linux")]
-    pub(crate) fn resize_read_burst(&self, buf: &mut BytesMut) {
-        self.0.cfg().read_buf().resize_read_burst(buf);
+    pub(crate) fn resize_read_burst(&self, buf: &mut BytesMut) -> bool {
+        self.0.cfg().read_buf().resize_read_burst(buf)
     }
 
     /// Updates the read status.

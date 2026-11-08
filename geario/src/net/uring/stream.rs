@@ -402,7 +402,7 @@ impl Handler for StreamOpsHandler {
                         // handle WouldBlock
                         if matches!(res, Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(::libc::EINPROGRESS)) {
                             log::error!("{}: Received WouldBlock {:?}, id: {:?}", item.tag(), res, item.ctx.id());
-                            st.recv_more(id, buf, &self.inner.api);
+                            st.recv_more(id, buf, false, &self.inner.api);
                         } else {
                             if let Ok(size) = res {
                                 if size > 0 {
@@ -421,7 +421,7 @@ impl Handler for StreamOpsHandler {
                                 // Reactor must read all recv() call before handling
                                 // disconnects
                                 item.flags.insert(Flags::RD_MORE);
-                                st.recv_more(id, buf, &self.inner.api);
+                                st.recv_more(id, buf, true, &self.inner.api);
                             } else {
                                 item.flags.remove(Flags::RD_MORE);
                                 if item.ctx.update_read_status(buf, res) == IoTaskStatus::Io {
@@ -626,9 +626,34 @@ impl StreamOpsStorage {
         }
     }
 
-    fn recv_more(&mut self, id: usize, mut buf: BytesMut, api: &ReactorApi) {
+    fn recv_more(&mut self, id: usize, mut buf: BytesMut, readable: bool, api: &ReactorApi) {
         if let Some(item) = self.streams.get_mut(id) {
-            item.ctx.resize_read_burst(&mut buf);
+            let grew = item.ctx.resize_read_burst(&mut buf);
+            if grew && readable {
+                let chunk = buf.chunk_mut();
+                let read = crate::syscall!(
+                    break libc::recv(
+                        item.io.as_raw_fd(),
+                        chunk.as_mut_ptr().cast(),
+                        chunk.len(),
+                        libc::MSG_DONTWAIT,
+                    )
+                );
+                if let std::task::Poll::Ready(Ok(n)) = read
+                    && n != 0
+                {
+                    // SAFETY: recv initialized exactly n bytes in the chunk.
+                    unsafe { buf.advance_mut(n) };
+                    // Publish even a partial read. Waiting for another CQE
+                    // here could hide these bytes while the peer waits for a
+                    // reply. Keep RD_MORE until the next Recv completion so
+                    // an RDHUP cannot discard bytes still queued in the socket.
+                    if item.ctx.update_read_status(buf, Ok(n)) == IoTaskStatus::Io {
+                        self.recv(id, false, api);
+                    }
+                    return;
+                }
+            }
 
             let slice = buf.chunk_mut();
             let buf_ptr = slice.as_mut_ptr();
