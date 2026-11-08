@@ -89,6 +89,13 @@ impl Runtime {
         JoinHandle::new(task)
     }
 
+    /// The current driver will poll immediately after processing completions.
+    /// Work enqueued by those completions needs no kernel notification.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn before_io_completions(&self) {
+        self.queue.idle.set(false);
+    }
+
     /// Poll runtime and run active tasks.
     pub fn poll(&self) -> PollResult {
         if self.stop.get() {
@@ -221,17 +228,13 @@ impl RunnableQueue {
     }
 
     fn run(&self) -> bool {
-        let local_queue = {
-            let q = unsafe { &mut *self.local_queue.get() };
-            for _ in 0..self.event_interval {
-                if let Some(task) = q.pop_front() {
-                    task.run();
-                } else {
-                    break;
-                }
-            }
-            !q.is_empty()
-        };
+        for _ in 0..self.event_interval {
+            // Release the queue borrow before polling the task; it may
+            // enqueue another local task.
+            let next = unsafe { (*self.local_queue.get()).pop_front() };
+            let Some(task) = next else { break };
+            task.run();
+        }
 
         let sync_queue_fixed = match self.sync_fixed_queue.try_dequeue() {
             Ok(buf) => {
@@ -259,6 +262,9 @@ impl RunnableQueue {
             }
         };
 
+        // Cross-thread work can have enqueued local tasks after the first
+        // drain. Check again so the driver cannot sleep with work queued.
+        let local_queue = unsafe { !(*self.local_queue.get()).is_empty() };
         let more_tasks = local_queue || sync_queue_fixed || sync_queue;
         if !more_tasks {
             self.idle.set(true);
@@ -303,5 +309,56 @@ impl RuntimeBuilder {
     /// Build [`Runtime`].
     pub fn build(&self, handle: Box<dyn Notify>) -> Runtime {
         Runtime::with_builder(self, handle)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Debug)]
+    struct CountNotifications(Arc<AtomicUsize>);
+
+    impl Notify for CountNotifications {
+        fn notify(&self) -> io::Result<()> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cross_thread_work_can_enqueue_local_work_before_sleep() {
+        let notifications = Arc::new(AtomicUsize::new(0));
+        let rt = Runtime::new(Box::new(CountNotifications(notifications.clone())));
+        rt.queue.idle.set(false);
+        let handle = rt.handle();
+        thread::spawn(move || {
+            let child_handle = handle.clone();
+            handle
+                .spawn(async move {
+                    child_handle.spawn(async {}).detach();
+                })
+                .detach();
+        })
+        .join()
+        .unwrap();
+
+        assert_eq!(rt.poll(), PollResult::PollAgain);
+        assert_eq!(rt.poll(), PollResult::Pending);
+        assert_eq!(notifications.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn completion_work_does_not_notify_the_worker_that_is_already_running() {
+        let notifications = Arc::new(AtomicUsize::new(0));
+        let rt = Runtime::new(Box::new(CountNotifications(notifications.clone())));
+        assert_eq!(rt.poll(), PollResult::Pending);
+        rt.before_io_completions();
+        let task = rt.spawn(async {});
+        assert_eq!(rt.poll(), PollResult::Pending);
+        assert!(task.is_finished());
+        assert_eq!(notifications.load(Ordering::Relaxed), 0);
     }
 }

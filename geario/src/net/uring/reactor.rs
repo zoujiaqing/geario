@@ -413,6 +413,7 @@ impl crate::rt::Driver for Reactor {
         let mut cq = unsafe { ring.completion_shared() };
         let submitter = ring.submitter();
         let result = loop {
+            rt.before_io_completions();
             self.poll_completions(&mut cq, sq);
 
             let more_tasks = match rt.poll() {
