@@ -140,7 +140,7 @@ for size in "${sizes[@]}"; do
 done
 
 if [[ $mode == diagnose ]]; then
-    perf_bin=$(command -v perf || true)
+    perf_bin=${BENCH_PERF:-$(command -v perf || true)}
     for name in "${names[@]}"; do
         server_command "$name"
         key="$result_dir/16384-profile-$name"
@@ -152,8 +152,9 @@ if [[ $mode == diagnose ]]; then
             profiler=$!
             sleep 1
             taskset -c "${cpus[1]}" target/release/echo-client "$BENCH_ADDR" 4 4 16384 > "$key.client.txt"
-            wait "$profiler"
-            sudo "$perf_bin" report --stdio --no-children -i "$key.data" > "$key.perf.txt"
+            if wait "$profiler"; then
+                sudo "$perf_bin" report --stdio --no-children -i "$key.data" > "$key.perf.txt"
+            fi
         else
             echo "perf unavailable on this runner" > "$key.perf.log"
         fi

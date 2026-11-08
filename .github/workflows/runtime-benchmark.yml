@@ -32,10 +32,17 @@ jobs:
         if: inputs.mode == 'diagnose'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y strace linux-tools-common linux-tools-generic
-          perf_bin=$(find /usr/lib/linux-tools -name perf -type f | sort -V | tail -1)
-          test -x "$perf_bin"
-          echo "$(dirname "$perf_bin")" >> "$GITHUB_PATH"
+          if apt-cache show linux-perf >/dev/null 2>&1; then
+            sudo apt-get install -y strace linux-perf
+          else
+            sudo apt-get install -y strace linux-tools-common linux-tools-generic
+          fi
+          for bin in /usr/bin/perf $(find /usr/lib/linux-tools /usr/libexec -name perf 2>/dev/null || true); do
+            if test -x "$bin" && sudo "$bin" stat -e task-clock -- true >/dev/null 2>&1; then
+              echo "BENCH_PERF=$bin" >> "$GITHUB_ENV"
+              break
+            fi
+          done
       - name: Compare geario and Tokio over TCP loopback
         env:
           BENCH_MODE: ${{ inputs.mode || 'compare' }}
