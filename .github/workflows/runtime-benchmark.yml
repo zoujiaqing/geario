@@ -11,6 +11,10 @@ on:
         description: Commit to compare against in verify mode
         type: string
         default: 4a06cd04123f31c83f69c8510f7242716bf1e7ec
+      intermediate:
+        description: Optional intermediate commit to compare in the same verify run
+        type: string
+        required: false
   push:
     branches: [main]
     paths:
@@ -47,6 +51,7 @@ jobs:
         env:
           BENCH_MODE: ${{ inputs.mode || 'compare' }}
           BENCH_BASE_REF: ${{ inputs.baseline }}
+          BENCH_MID_REF: ${{ inputs.intermediate }}
         run: |
           sudo prlimit --pid $$ --memlock=unlimited:unlimited 2>/dev/null || true
           bash bench-runtime/compare.sh "$RUNNER_TEMP/runtime-benchmark"

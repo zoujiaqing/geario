@@ -33,21 +33,27 @@ for driver in "${drivers[@]}"; do
     cargo build --locked --release --features "$driver"
     cp target/release/echo-geario "$result_dir/geario-$driver"
 done
-if [[ $mode == verify ]]; then
-    base=$(git rev-parse --verify "${BENCH_BASE_REF:?missing baseline commit}^{commit}")
-    echo "baseline=$base" >> "$result_dir/environment.txt"
-    baseline=$(mktemp -d)
-    trap 'git worktree remove --force "$baseline"' EXIT
-    git worktree add --detach "$baseline" "$base"
+build_control() (
+    local label=$1 ref=$2 commit checkout
+    commit=$(git rev-parse --verify --end-of-options "$ref^{commit}")
+    echo "$label=$commit" >> "$result_dir/environment.txt"
+    checkout=$(mktemp -d)
+    trap 'git worktree remove --force "$checkout"' EXIT
+    git worktree add --detach "$checkout" "$commit"
     # Keep both harnesses identical, including the dependency lock.
-    cp -R Cargo.toml Cargo.lock src "$baseline/bench-runtime/"
-    cp ../bench-echo/server-geario/src/main.rs "$baseline/bench-echo/server-geario/src/"
-    cp ../bench-echo/client/src/main.rs "$baseline/bench-echo/client/src/"
-    CARGO_TARGET_DIR="$PWD/target" cargo build --manifest-path "$baseline/bench-runtime/Cargo.toml" \
+    cp -R Cargo.toml Cargo.lock src "$checkout/bench-runtime/"
+    cp ../bench-echo/server-geario/src/main.rs "$checkout/bench-echo/server-geario/src/"
+    cp ../bench-echo/client/src/main.rs "$checkout/bench-echo/client/src/"
+    CARGO_TARGET_DIR="$PWD/target" cargo build --manifest-path "$checkout/bench-runtime/Cargo.toml" \
         --locked --release --features uring --bin echo-geario
-    cp target/release/echo-geario "$result_dir/geario-base"
-    git worktree remove --force "$baseline"
-    trap - EXIT
+    cp target/release/echo-geario "$result_dir/geario-$label"
+)
+
+if [[ $mode == verify ]]; then
+    build_control base "${BENCH_BASE_REF:?missing baseline commit}"
+    if [[ -n ${BENCH_MID_REF:-} ]]; then
+        build_control step "$BENCH_MID_REF"
+    fi
 fi
 sha256sum "$result_dir"/geario-* target/release/echo-{tokio,client} \
     > "$result_dir/binaries.sha256"
@@ -91,7 +97,7 @@ server_command() {
         tokio) command=(target/release/echo-tokio) ;;
         polling) command=("$result_dir/geario-polling") ;;
         uring) ;;
-        base) command=("$result_dir/geario-base") ;;
+        base|step) command=("$result_dir/geario-$1") ;;
         plain) command=(env GEARIO_URING_ZC_SIZE=4294967295 "${command[@]}") ;;
         read64k) command=(env BENCH_READ_CAPACITY=65536 "${command[@]}") ;;
         read32k) command=(env BENCH_READ_CAPACITY=32744 "${command[@]}") ;;
@@ -130,8 +136,10 @@ if [[ $mode == diagnose || $mode == diagnose64 ]]; then
     fi
 elif [[ $mode == verify ]]; then
     names=(base uring tokio)
+    if [[ -n ${BENCH_MID_REF:-} ]]; then names=(base step uring tokio); fi
     sizes=(128 16384 65536)
     rounds=9
+    if [[ -n ${BENCH_MID_REF:-} ]]; then rounds=8; fi
 else
     names=(polling uring tokio)
     sizes=(128 16384)
