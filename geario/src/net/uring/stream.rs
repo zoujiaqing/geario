@@ -1063,13 +1063,59 @@ mod send_config_tests {
 }
 
 #[cfg(all(test, feature = "neon-uring", not(feature = "neon-polling")))]
-mod write_path_tests {
+mod stream_path_tests {
     use super::*;
     use crate::service::cfg::SharedCfg;
     use crate::util::time::{Millis, sleep, timeout};
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
+
+    #[crate::test]
+    async fn short_inline_receive_is_delivered_before_the_peer_sends_again() {
+        use std::net::{Shutdown, TcpListener, TcpStream};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (socket, _) = listener.accept().unwrap();
+        let tail: Vec<_> = (0..8193).map(|n| (n ^ (n >> 8)) as u8).collect();
+        peer.write_all(&tail).unwrap();
+
+        let io = crate::net::from_tcp_stream(socket, SharedCfg::new("BURST").into()).unwrap();
+        let ops: StreamOps = Arbiter::get_value(|| panic!("missing io_uring stream handler"));
+        let mut prefix = BytesMut::with_capacity(16 * 1024);
+        prefix.resize(16 * 1024, 0x5a);
+
+        ops.0.with(|st| {
+            let id = st.streams.iter().next().unwrap().0;
+            // Model the first full Recv completion with SOCK_NONEMPTY.
+            st.streams[id].flags.insert(Flags::RD_MORE);
+            st.recv_more(id, prefix, true, &ops.0.api);
+            assert!(
+                st.streams[id].rd_op.is_none(),
+                "the available tail was not drained inline"
+            );
+        });
+
+        let mut expected = vec![0x5a; 16 * 1024];
+        expected.extend_from_slice(&tail);
+        let got = timeout(Millis(2000), io.recv(&crate::codec::BytesCodec))
+            .await
+            .expect("the peer is waiting and will not send another byte")
+            .unwrap()
+            .unwrap();
+        assert_eq!(&got[..], expected);
+
+        peer.shutdown(Shutdown::Write).unwrap();
+        assert!(
+            timeout(Millis(2000), io.recv(&crate::codec::BytesCodec))
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none(),
+            "the next receive should observe the peer half-close"
+        );
+    }
 
     #[crate::test]
     async fn short_direct_send_submits_only_the_unsent_suffix() {
