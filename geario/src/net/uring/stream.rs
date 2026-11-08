@@ -619,7 +619,7 @@ impl StreamOpsStorage {
 
     fn recv_more(&mut self, id: usize, mut buf: BytesMut, api: &ReactorApi) {
         if let Some(item) = self.streams.get_mut(id) {
-            item.ctx.resize_read_buf(&mut buf);
+            item.ctx.resize_read_burst(&mut buf);
 
             let slice = buf.chunk_mut();
             let buf_ptr = slice.as_mut_ptr();

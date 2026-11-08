@@ -305,6 +305,23 @@ impl BufConfig {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn resize_read_burst(&self, buf: &mut BytesMut) {
+        if self.recycle_read_page
+            && buf.capacity() == DEFAULT_READ_HIGH
+            && buf.remaining_mut() < self.low
+        {
+            // The socket still has data and the first page is nearly full.
+            // Grow once instead of copying the accumulated prefix at each
+            // 16 KiB boundary. The page is reclaimed after its last slice.
+            let mut burst = BytesMut::with_page_size(BytePageSize::Size64);
+            burst.extend_from_slice(buf);
+            *buf = burst;
+        } else {
+            self.resize(buf);
+        }
+    }
+
     #[inline]
     /// Resize buffer
     pub fn resize(&self, buf: &mut BytesMut) {
@@ -380,6 +397,28 @@ impl LocalCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn burst_growth_preserves_the_prefix_and_custom_capacity_policy() {
+        let default = IoConfig::default();
+        let cfg = default.read_buf();
+        let mut page = cfg.get();
+        page.resize(DEFAULT_READ_HIGH, 0x5a);
+        cfg.resize_read_burst(&mut page);
+        assert_eq!(page.capacity(), BytePageSize::Size64.capacity());
+        assert_eq!(page.len(), DEFAULT_READ_HIGH);
+        assert!(page.iter().all(|&byte| byte == 0x5a));
+
+        let custom = IoConfig::default().set_read_buf(DEFAULT_READ_HIGH, 536, 0);
+        let cfg = custom.read_buf();
+        let mut page = cfg.get();
+        page.resize(DEFAULT_READ_HIGH, 0xa5);
+        cfg.resize_read_burst(&mut page);
+        assert_eq!(page.capacity(), DEFAULT_READ_HIGH * 2);
+        assert_eq!(page.len(), DEFAULT_READ_HIGH);
+        assert!(page.iter().all(|&byte| byte == 0xa5));
+    }
 
     #[test]
     fn default_read_page_waits_for_its_last_slice_before_recycling() {
