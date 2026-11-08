@@ -70,14 +70,17 @@ impl IoContext {
     }
 
     #[cfg(target_os = "linux")]
-    pub(crate) fn get_read_buf_for_burst(&self) -> BytesMut {
-        self.get_read_buf_or(|| {
-            self.0
-                .cfg()
-                .read_buf()
-                .take_cached_read_burst()
-                .unwrap_or_else(|| self.st().get_read_buf())
-        })
+    pub(crate) fn get_read_buf_for_burst(&self) -> (BytesMut, bool) {
+        let mut cached = false;
+        let buf = self.get_read_buf_or(|| {
+            if let Some(page) = self.0.cfg().read_buf().take_cached_read_burst() {
+                cached = true;
+                page
+            } else {
+                self.st().get_read_buf()
+            }
+        });
+        (buf, cached)
     }
 
     fn get_read_buf_or(&self, fresh: impl FnOnce() -> BytesMut) -> BytesMut {

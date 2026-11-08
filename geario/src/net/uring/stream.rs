@@ -600,10 +600,10 @@ impl StreamOpsStorage {
                 #[cfg(feature = "trace")]
                 log::trace!("{}: Rcv({id})", item.ctx.tag());
 
-                let mut buf = if item.recent_read_burst && room_for_burst {
+                let (mut buf, cached_burst) = if item.recent_read_burst && room_for_burst {
                     item.ctx.get_read_buf_for_burst()
                 } else {
-                    item.ctx.get_read_buf()
+                    (item.ctx.get_read_buf(), false)
                 };
                 if !buf.is_empty() {
                     // These are bytes the consumer has not taken yet. This
@@ -622,7 +622,13 @@ impl StreamOpsStorage {
                 }
                 let s = buf.chunk_mut();
                 let buf_ptr = s.as_mut_ptr();
-                let buf_len = s.len() as u32;
+                // Keep the original receive window. If there is more data,
+                // recv_more can fill the cached page without copying the prefix.
+                let buf_len = if cached_burst {
+                    s.len().min(BytePageSize::Size16.capacity())
+                } else {
+                    s.len()
+                } as u32;
                 let op_id = self.ops.insert(Some(Operation::Recv { id, buf })) as u32;
                 item.rd_op = NonZeroU32::new(op_id);
 
