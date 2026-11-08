@@ -13,17 +13,21 @@ runtime thread. This measures the complete TCP echo stacks, including those
 different accept paths. A shared runner can surface regressions, but its
 results are exploratory and have no percentage threshold for passing.
 
-The workflow also supports two manual modes:
+The workflow also supports these manual modes:
 
 - `diagnose` holds the 16 KiB workload fixed while changing one geario
   setting at a time. It compares ordinary ring sends, plain sends with
   SendZc disabled, a larger receive buffer, and a handler that uses geario's
   existing direct socket write API. It takes perf samples and counts syscalls
   in separate instrumented runs.
-- `verify` builds the selected ref and a pinned baseline on the same runner,
-  using identical benchmark sources and dependency locks. It compares both
-  builds and Tokio in nine rotated rounds at 128 B, 16 KiB and 64 KiB. The CI summary
-  reports medians and the median per-round ratio against the baseline.
+- `diagnose64` compares default io_uring, Tokio, direct socket writes,
+  and an explicitly configured 64 KiB receive buffer. It takes separate perf
+  and syscall samples after measuring four rotated rounds at 64 KiB.
+- `verify` builds the selected ref and a pinned baseline on the same runner
+  with the same benchmark sources and lockfile. It compares both builds and
+  Tokio in nine rotated rounds at 128 B, 16 KiB, and 64 KiB. Supply an optional
+  `intermediate` ref for a fourth build and eight rotated rounds. The CI
+  summary reports medians and the median per-round ratio against the baseline.
 
 The [16 KiB diagnosis](https://github.com/zoujiaqing/geario/actions/runs/42456488002)
 found a +17.9% throughput change when disabling SendZc, +9.1% when using a
@@ -151,3 +155,58 @@ in eight of nine rounds. Its paired bootstrap 95% interval was
 [−2.28%, −0.16%], within the previous 3% throughput tolerance.
 The [functional CI](https://github.com/zoujiaqing/geario/actions/runs/42470169264)
 passed, including the burst-prefix, write cancellation, and short-write tests.
+
+The [64 KiB follow-up profile](https://github.com/zoujiaqing/geario/actions/runs/42474315946)
+used the runtime at `f635fdc`. TCP wakeups and kernel copies dominated
+both profiles. Geario also spent time submitting and completing receive
+work in the ring. Its traced baseline made roughly 0.67 ring entries
+per completed echo. Bypassing the send queue with the existing direct
+write API reduced that to 0.50 and added roughly one write syscall per
+echo. Untraced throughput was unchanged and closed-loop p99 increased
+24.5%. Always starting with an explicitly configured 64 KiB receive
+allocation reduced throughput by 14.2%. Those two controls were kept
+separate from the production changes.
+
+Two receive candidates were then compared. One attempts a bounded
+nonblocking continuation only after a burst buffer grows and the
+kernel reports readable data. The other lets a connection that recently
+received a large burst borrow a 64 KiB page from the existing pool.
+The latter uses the normal receive lifecycle and leaves custom
+buffer sizing in control.
+
+The [nine-round continuation comparison](https://github.com/zoujiaqing/geario/actions/runs/42474673673)
+at 64 KiB gave +1.4% throughput, −1.7% CPU/request, and +29.4% p99
+against `f635fdc`. The [eight-round four-way comparison](https://github.com/zoujiaqing/geario/actions/runs/42474783478)
+measured the continuation and cached-page candidates alongside the same
+baseline and Tokio on one runner:
+
+| 64 KiB variant | RPS | CPU µs/request | p99 µs | Paired RPS | Paired CPU/request | Paired p99 |
+|---|---:|---:|---:|---:|---:|---:|
+| Baseline | 39,874 | 24.96 | 129.15 | — | — | — |
+| Nonblocking continuation | 39,078 | 25.58 | 192.35 | −1.9% | +2.1% | +42.3% |
+| Cached page with full initial window | 40,905 | 24.42 | 152.40 | +4.0% | −4.0% | +16.1% |
+| Tokio | 42,059 | 23.17 | 157.90 | — | — | — |
+
+For the full-window candidate, the paired bootstrap 95% throughput
+interval was [−1.37%, +5.52%], and p99 increased in seven of eight rounds.
+Neither candidate cleared the tail latency check.
+
+The [preserved-window comparison](https://github.com/zoujiaqing/geario/actions/runs/42475509137)
+also reused a cached 64 KiB page, but limited the first receive to 16 KiB.
+This retained the receive submission sequence while avoiding the prefix copy
+on a continuation. Nine paired rounds on one AMD EPYC 7763 runner gave these
+changes versus `f635fdc`:
+
+| Size | Paired throughput | Paired CPU/request | Paired p99 |
+|---|---:|---:|---:|
+| 128 B | −0.3% | +0.4% | +0.4% |
+| 16 KiB | −2.6% | +2.6% | +2.8% |
+| 64 KiB | +0.6% | −0.3% | −1.7% |
+
+The paired bootstrap 95% interval for throughput was [−4.03%, +2.59%]
+at 64 KiB and [−2.98%, −1.49%] at 16 KiB. The 64 KiB baseline was
+13.2% behind Tokio on throughput in this run. The candidate was 12.3%
+behind, with 14.9% more CPU per request and 9.7% lower closed-loop p99.
+The [functional CI](https://github.com/zoujiaqing/geario/actions/runs/42475505777)
+passed. The 16 KiB throughput loss and uncertain 64 KiB gain excluded
+this candidate from the default runtime.
