@@ -62,3 +62,38 @@ from 39.1% to 11.4%. At 128 B the combined candidate changed throughput by
 +5.5%, CPU per echo by −5.0%, and p99 by −13.6% relative to the baseline.
 The [functional CI run](https://github.com/zoujiaqing/geario/actions/runs/42457474064)
 passed for the measured code.
+
+The [follow-up profile](https://github.com/zoujiaqing/geario/actions/runs/42465945456)
+at `c96174d` found one send syscall and 0.25 `io_uring_enter` calls per
+16 KiB echo under tracing. It found almost no notifier reads/writes. The
+application's direct write experiment still improved untraced throughput by
+7.2%. The profile showed TCP wakeups and data copies on both stacks, with
+geario-specific samples in the buffered send and receive submission paths.
+
+The [encoder-turn send A/B](https://github.com/zoujiaqing/geario/actions/runs/42466378064)
+used identical handlers. At 16 KiB the paired median was +1.1% throughput,
+−1.1% CPU/request, and −0.7% p99. Throughput improved in eight of nine
+rounds. At 128 B the paired medians were −0.5%, +0.4%, and +0.6%, respectively.
+At 64 KiB they were +1.9%, −1.9%, and −2.7%.
+
+The [receive poll-first A/B](https://github.com/zoujiaqing/geario/actions/runs/42466465882)
+reduced 16 KiB closed-loop p99 by 21.9% on its runner, while throughput
+fell 2.2% and CPU/request increased 2.3%. It was excluded from the default
+path. Absolute gaps to Tokio changed across runner CPUs. The paired effects
+in this report are all within a run.
+
+The [default read page recycling A/B](https://github.com/zoujiaqing/geario/actions/runs/42467143281)
+used the encoder-turn send as its baseline. It found a +0.2% paired
+throughput change at 16 KiB on its AMD runner. Default receive allocations
+reuse the existing thread-local 16 KiB page pool after the last reference
+is released. Explicit read buffer configuration continues to use its own
+cache policy.
+
+The [combined follow-up](https://github.com/zoujiaqing/geario/actions/runs/42467153879)
+compared both changes with `c96174d` on one Intel Xeon 6973P-C runner. At
+16 KiB, throughput increased in all nine rounds. The paired medians were
++6.4% throughput, −6.2% CPU/request, and −3.2% p99. The paired throughput
+gap to Tokio narrowed from 11.8% to 6.3%. At 128 B the paired medians were
+−0.1%, +0.1%, and +0.9%, respectively. At 64 KiB they were −0.3%, −0.3%,
+and −0.1%. The [functional CI](https://github.com/zoujiaqing/geario/actions/runs/42467148169)
+passed for the measured code.
