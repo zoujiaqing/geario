@@ -870,8 +870,11 @@ impl StreamCtl {
     }
 
     pub(crate) fn resume_read(&self) {
-        self.inner
-            .with(|st| st.recv(self.id, false, &self.inner.api));
+        // A consumer that has just drained the buffered data often resumes
+        // reading before the peer sends again. Arm readiness first where the
+        // kernel supports it, as on automatic rearm after a completed read.
+        let api = &self.inner.api;
+        self.inner.with(|st| st.recv(self.id, api.is_new(), api));
     }
 
     pub(crate) fn resume_write(&self) {
