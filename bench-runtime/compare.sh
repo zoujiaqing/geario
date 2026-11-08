@@ -19,12 +19,19 @@ fi
     echo "server_cpu=${cpus[0]} client_cpu=${cpus[1]}"
 } > "$result_dir/environment.txt"
 
+mode=${BENCH_MODE:-compare}
+drivers=(polling uring)
+if [[ $mode == diagnose ]]; then
+    drivers=(uring)
+    export RUSTFLAGS="${RUSTFLAGS:-} -C force-frame-pointers=yes -C debuginfo=1"
+fi
+
 # A forced driver fails on init rather than silently falling back to polling.
-for driver in polling uring; do
+for driver in "${drivers[@]}"; do
     cargo build --locked --release --features "$driver"
     cp target/release/echo-geario "$result_dir/geario-$driver"
 done
-sha256sum "$result_dir"/geario-{polling,uring} target/release/echo-{tokio,client} \
+sha256sum "$result_dir"/geario-* target/release/echo-{tokio,client} \
     > "$result_dir/binaries.sha256"
 
 export BENCH_ADDR=127.0.0.1:18080 BENCH_WORKERS=1
@@ -40,10 +47,10 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-measure() {
-    local name=$1 exe=$2 size=$3 round=$4 key
-    key="$result_dir/${size}-${round}-${name}"
-    taskset -c "${cpus[0]}" "$exe" > "$key.server.log" 2>&1 &
+start() {
+    local key=$1
+    shift
+    taskset -c "${cpus[0]}" "$@" > "$key.server.log" 2>&1 &
     pid=$!
     python3 - "$pid" "$BENCH_ADDR" <<'PY'
 import os, socket, sys, time
@@ -58,6 +65,27 @@ for _ in range(100):
 else:
     sys.exit("server did not listen")
 PY
+}
+
+server_command() {
+    command=("$result_dir/geario-uring")
+    case "$1" in
+        tokio) command=(target/release/echo-tokio) ;;
+        polling) command=("$result_dir/geario-polling") ;;
+        uring) ;;
+        plain) command=(env GEARIO_URING_ZC_SIZE=4294967295 "${command[@]}") ;;
+        read32k) command=(env BENCH_READ_CAPACITY=32744 "${command[@]}") ;;
+        direct) command=(env BENCH_DIRECT_WRITE=1 "${command[@]}") ;;
+        *) echo "unknown variant: $1" >&2; return 1 ;;
+    esac
+}
+
+measure() {
+    local name=$1 size=$2 round=$3 key
+    key="$result_dir/${size}-${round}-${name}"
+    local -a command
+    server_command "$name"
+    start "$key" "${command[@]}"
     taskset -c "${cpus[1]}" target/release/echo-client "$BENCH_ADDR" 4 1 "$size" > "$key.warmup.txt"
     local before after
     before=$(awk '{print $14 + $15}' "/proc/$pid/stat")
@@ -71,14 +99,55 @@ PY
     cleanup
 }
 
-for size in 128 16384; do
-    for round in {0..5}; do
-        names=(polling uring tokio)
-        for offset in {0..2}; do
-            name=${names[(round + offset) % 3]}
-            exe="$result_dir/geario-$name"
-            if [[ $name == tokio ]]; then exe=target/release/echo-tokio; fi
-            measure "$name" "$exe" "$size" "$round"
+if [[ $mode == diagnose ]]; then
+    names=(uring tokio plain read32k direct)
+    sizes=(16384)
+    rounds=5
+else
+    names=(polling uring tokio)
+    sizes=(128 16384)
+    rounds=6
+fi
+for size in "${sizes[@]}"; do
+    for ((round=0; round<rounds; round++)); do
+        for ((offset=0; offset<${#names[@]}; offset++)); do
+            measure "${names[(round + offset) % ${#names[@]}]}" "$size" "$round"
         done
     done
 done
+
+if [[ $mode == diagnose ]]; then
+    perf_bin=$(command -v perf || true)
+    for name in "${names[@]}"; do
+        server_command "$name"
+        key="$result_dir/16384-profile-$name"
+        start "$key" "${command[@]}"
+        taskset -c "${cpus[1]}" target/release/echo-client "$BENCH_ADDR" 4 1 16384 > "$key.warmup.txt"
+        # Profiling is separate from the untraced latency/throughput samples.
+        if [[ -n $perf_bin ]] && sudo "$perf_bin" stat -e task-clock -- true >/dev/null 2>&1; then
+            sudo "$perf_bin" record -F 997 --call-graph fp -e cpu-clock -p "$pid" -o "$key.data" -- sleep 6 > "$key.perf.log" 2>&1 &
+            profiler=$!
+            sleep 1
+            taskset -c "${cpus[1]}" target/release/echo-client "$BENCH_ADDR" 4 4 16384 > "$key.client.txt"
+            wait "$profiler"
+            sudo "$perf_bin" report --stdio --no-children -i "$key.data" > "$key.perf.txt"
+        else
+            echo "perf unavailable on this runner" > "$key.perf.log"
+        fi
+        if command -v strace >/dev/null; then
+            sudo timeout -s INT 6 strace -f -c -p "$pid" -o "$key.syscalls.txt" > "$key.strace.log" 2>&1 &
+            tracer=$!
+            for ((attempt=0; attempt<100; attempt++)); do
+                if awk '/^TracerPid:/ {exit $2 == 0}' "/proc/$pid/status"; then break; fi
+                sleep 0.02
+            done
+            awk '/^TracerPid:/ {exit $2 == 0}' "/proc/$pid/status"
+            taskset -c "${cpus[1]}" target/release/echo-client "$BENCH_ADDR" 4 3 16384 > "$key.strace-client.txt"
+            rc=0
+            wait "$tracer" || rc=$?
+            [[ $rc == 124 ]]
+            test -s "$key.syscalls.txt"
+        fi
+        cleanup
+    done
+fi

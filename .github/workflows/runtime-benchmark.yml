@@ -2,6 +2,11 @@ name: Linux runtime comparison
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [compare, diagnose]
+        default: compare
   push:
     branches: [main]
     paths:
@@ -17,7 +22,17 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Install Linux diagnostics
+        if: inputs.mode == 'diagnose'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y strace linux-tools-common linux-tools-generic
+          perf_bin=$(find /usr/lib/linux-tools -name perf -type f | sort -V | tail -1)
+          test -x "$perf_bin"
+          echo "$(dirname "$perf_bin")" >> "$GITHUB_PATH"
       - name: Compare geario and Tokio over TCP loopback
+        env:
+          BENCH_MODE: ${{ inputs.mode || 'compare' }}
         run: |
           sudo prlimit --pid $$ --memlock=unlimited:unlimited 2>/dev/null || true
           bash bench-runtime/compare.sh "$RUNNER_TEMP/runtime-benchmark"

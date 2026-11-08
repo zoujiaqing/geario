@@ -1,7 +1,7 @@
 use std::io;
 
 use geario::codec::BytesCodec;
-use geario::io::Io;
+use geario::io::{Io, IoConfig};
 use geario::service::cfg::SharedCfg;
 use geario::service::fn_service;
 
@@ -18,18 +18,31 @@ async fn main() -> io::Result<()> {
             .map_err(io::Error::other)?;
         server = server.workers(workers.get());
     }
+    let mut cfg = SharedCfg::new("ECHO");
+    if let Ok(capacity) = std::env::var("BENCH_READ_CAPACITY") {
+        let capacity = capacity
+            .parse::<std::num::NonZeroUsize>()
+            .map_err(io::Error::other)?;
+        cfg = cfg.add(IoConfig::default().set_read_buf(capacity.get(), 536, 128));
+    }
+    let direct = std::env::var_os("BENCH_DIRECT_WRITE").is_some();
     server
-        .bind("echo", addr, SharedCfg::new("ECHO"), async |_| {
-            fn_service(async |io: Io| {
+        .bind("echo", addr, cfg, async move |_| {
+            fn_service(async move |io: Io| {
                 let codec = BytesCodec;
-                loop {
-                    match io.recv(&codec).await {
-                        Ok(Some(item)) => {
-                            if io.send(item, &codec).await.is_err() {
-                                break;
-                            }
+                while let Ok(Some(mut item)) = io.recv(&codec).await {
+                    if direct {
+                        let n = io
+                            .get_ref()
+                            .try_write_vectored(&[io::IoSlice::new(&item)])?;
+                        if n == item.len() {
+                            continue;
                         }
-                        Ok(None) | Err(_) => break,
+                        use geario::bytes::Buf;
+                        item.advance(n);
+                    }
+                    if io.send(item, &codec).await.is_err() {
+                        break;
                     }
                 }
                 Ok::<_, io::Error>(())
