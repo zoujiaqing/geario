@@ -5,7 +5,7 @@ on:
     inputs:
       mode:
         type: choice
-        options: [compare, diagnose, verify]
+        options: [compare, diagnose, diagnose64, verify]
         default: compare
       baseline:
         description: Commit to compare against in verify mode
@@ -29,7 +29,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Install Linux diagnostics
-        if: inputs.mode == 'diagnose'
+        if: inputs.mode == 'diagnose' || inputs.mode == 'diagnose64'
         run: |
           sudo apt-get update -qq
           if apt-cache show linux-perf >/dev/null 2>&1; then
@@ -52,7 +52,7 @@ jobs:
           bash bench-runtime/compare.sh "$RUNNER_TEMP/runtime-benchmark"
           reference=tokio
           if [ "$BENCH_MODE" = verify ]; then reference=base; fi
-          if [ "$BENCH_MODE" = diagnose ]; then reference=uring; fi
+          if [[ "$BENCH_MODE" == diagnose* ]]; then reference=uring; fi
           python3 bench-runtime/summarize.py "$RUNNER_TEMP/runtime-benchmark" \
             --reference "$reference" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4

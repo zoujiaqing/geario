@@ -21,10 +21,10 @@ fi
 
 mode=${BENCH_MODE:-compare}
 drivers=(polling uring)
-if [[ $mode == diagnose || $mode == verify ]]; then
+if [[ $mode == diagnose || $mode == diagnose64 || $mode == verify ]]; then
     drivers=(uring)
 fi
-if [[ $mode == diagnose ]]; then
+if [[ $mode == diagnose || $mode == diagnose64 ]]; then
     export RUSTFLAGS="${RUSTFLAGS:-} -C force-frame-pointers=yes -C debuginfo=1"
 fi
 
@@ -93,6 +93,7 @@ server_command() {
         uring) ;;
         base) command=("$result_dir/geario-base") ;;
         plain) command=(env GEARIO_URING_ZC_SIZE=4294967295 "${command[@]}") ;;
+        read64k) command=(env BENCH_READ_CAPACITY=65536 "${command[@]}") ;;
         read32k) command=(env BENCH_READ_CAPACITY=32744 "${command[@]}") ;;
         direct) command=(env BENCH_DIRECT_WRITE=1 "${command[@]}") ;;
         *) echo "unknown variant: $1" >&2; return 1 ;;
@@ -118,10 +119,15 @@ measure() {
     cleanup
 }
 
-if [[ $mode == diagnose ]]; then
+if [[ $mode == diagnose || $mode == diagnose64 ]]; then
     names=(uring tokio plain read32k direct)
     sizes=(16384)
     rounds=5
+    if [[ $mode == diagnose64 ]]; then
+        names=(uring tokio direct read64k)
+        sizes=(65536)
+        rounds=4
+    fi
 elif [[ $mode == verify ]]; then
     names=(base uring tokio)
     sizes=(128 16384 65536)
@@ -139,19 +145,20 @@ for size in "${sizes[@]}"; do
     done
 done
 
-if [[ $mode == diagnose ]]; then
+if [[ $mode == diagnose || $mode == diagnose64 ]]; then
+    profile_size=${sizes[0]}
     perf_bin=${BENCH_PERF:-$(command -v perf || true)}
     for name in "${names[@]}"; do
         server_command "$name"
-        key="$result_dir/16384-profile-$name"
+        key="$result_dir/$profile_size-profile-$name"
         start "$key" "${command[@]}"
-        taskset -c "${cpus[1]}" target/release/echo-client "$BENCH_ADDR" 4 1 16384 > "$key.warmup.txt"
+        taskset -c "${cpus[1]}" target/release/echo-client "$BENCH_ADDR" 4 1 "$profile_size" > "$key.warmup.txt"
         # Profiling is separate from the untraced latency/throughput samples.
         if [[ -n $perf_bin ]] && sudo "$perf_bin" stat -e task-clock -- true >/dev/null 2>&1; then
             sudo "$perf_bin" record -F 997 --call-graph fp -e cpu-clock -p "$pid" -o "$key.data" -- sleep 6 > "$key.perf.log" 2>&1 &
             profiler=$!
             sleep 1
-            taskset -c "${cpus[1]}" target/release/echo-client "$BENCH_ADDR" 4 4 16384 > "$key.client.txt"
+            taskset -c "${cpus[1]}" target/release/echo-client "$BENCH_ADDR" 4 4 "$profile_size" > "$key.client.txt"
             if wait "$profiler"; then
                 sudo "$perf_bin" report --stdio --no-children -i "$key.data" > "$key.perf.txt"
             fi
@@ -159,14 +166,14 @@ if [[ $mode == diagnose ]]; then
             echo "perf unavailable on this runner" > "$key.perf.log"
         fi
         if command -v strace >/dev/null; then
-            sudo timeout -s INT 6 strace -f -c -p "$pid" -o "$key.syscalls.txt" > "$key.strace.log" 2>&1 &
+            sudo timeout -k 3 -s INT 6 strace -f -c -p "$pid" -o "$key.syscalls.txt" > "$key.strace.log" 2>&1 &
             tracer=$!
             for ((attempt=0; attempt<100; attempt++)); do
                 if awk '/^TracerPid:/ {exit $2 == 0}' "/proc/$pid/status"; then break; fi
                 sleep 0.02
             done
             awk '/^TracerPid:/ {exit $2 == 0}' "/proc/$pid/status"
-            taskset -c "${cpus[1]}" target/release/echo-client "$BENCH_ADDR" 4 3 16384 > "$key.strace-client.txt"
+            taskset -c "${cpus[1]}" target/release/echo-client "$BENCH_ADDR" 4 3 "$profile_size" > "$key.strace-client.txt"
             rc=0
             wait "$tracer" || rc=$?
             [[ $rc == 124 ]]
