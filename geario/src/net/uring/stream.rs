@@ -75,18 +75,21 @@ bitflags::bitflags! {
 struct SendConfig {
     zc_size: u32,
     max_write_items: usize,
+    grow_read_burst: bool,
 }
 
 impl SendConfig {
     fn load() -> Self {
         static CONFIG: std::sync::OnceLock<SendConfig> = std::sync::OnceLock::new();
         *CONFIG.get_or_init(|| {
-            Self::parse(
+            let mut config = Self::parse(
                 std::env::var("GEARIO_URING_ZC_SIZE").ok().as_deref(),
                 std::env::var("GEARIO_URING_MAX_WRITE_ITEMS")
                     .ok()
                     .as_deref(),
-            )
+            );
+            config.grow_read_burst = std::env::var_os("GEARIO_URING_GROW_READ_BURST").is_some();
+            config
         })
     }
 
@@ -101,6 +104,7 @@ impl SendConfig {
                 .filter(|&n| n > 0)
                 .unwrap_or(MAX_WRITE_ITEMS)
                 .min(MAX_WRITE_ITEMS),
+            grow_read_burst: false,
         }
     }
 }
@@ -619,7 +623,14 @@ impl StreamOpsStorage {
 
     fn recv_more(&mut self, id: usize, mut buf: BytesMut, api: &ReactorApi) {
         if let Some(item) = self.streams.get_mut(id) {
-            item.ctx.resize_read_buf(&mut buf);
+            if self.send_config.grow_read_burst
+                && buf.capacity() == 16 * 1024
+                && buf.remaining_mut() < 536
+            {
+                buf.reserve_capacity(64 * 1024);
+            } else {
+                item.ctx.resize_read_buf(&mut buf);
+            }
 
             let slice = buf.chunk_mut();
             let buf_ptr = slice.as_mut_ptr();

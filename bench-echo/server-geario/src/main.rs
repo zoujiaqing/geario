@@ -42,14 +42,20 @@ async fn main() -> io::Result<()> {
                 let codec = BytesCodec;
                 while let Ok(Some(mut item)) = io.recv(&codec).await {
                     if let Some(serial) = segments {
-                        while !item.is_empty() {
-                            let chunk = item.split_to(item.len().min(16 * 1024));
-                            io.get_ref().encode_bytes(chunk)?;
-                            if serial {
+                        if serial {
+                            while !item.is_empty() {
+                                let chunk = item.split_to(item.len().min(16 * 1024));
+                                io.get_ref().encode_bytes(chunk)?;
                                 io.flush(true).await?;
                             }
-                        }
-                        if !serial {
+                        } else {
+                            // Queue the whole batch before the write hook can run.
+                            io.get_ref().with_write_buf(|pages| {
+                                while !item.is_empty() {
+                                    let chunk = item.split_to(item.len().min(16 * 1024));
+                                    pages.append(chunk);
+                                }
+                            })?;
                             io.flush(true).await?;
                         }
                         continue;

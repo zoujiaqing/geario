@@ -95,6 +95,8 @@ server_command() {
         plain) command=(env GEARIO_URING_ZC_SIZE=4294967295 "${command[@]}") ;;
         read32k) command=(env BENCH_READ_CAPACITY=32744 "${command[@]}") ;;
         direct) command=(env BENCH_DIRECT_WRITE=1 "${command[@]}") ;;
+        grow) command=(env GEARIO_URING_GROW_READ_BURST=1 "${command[@]}") ;;
+        growplain) command=(env GEARIO_URING_GROW_READ_BURST=1 GEARIO_URING_ZC_SIZE=4294967295 "${command[@]}") ;;
         read64k) command=(env BENCH_READ_CAPACITY=65536 "${command[@]}") ;;
         read64plain) command=(env BENCH_READ_CAPACITY=65536 GEARIO_URING_ZC_SIZE=4294967295 "${command[@]}") ;;
         vectored|serial) command=(env BENCH_READ_CAPACITY=65536 GEARIO_URING_ZC_SIZE=4294967295 BENCH_SEGMENTS="$1" "${command[@]}") ;;
@@ -126,9 +128,9 @@ if [[ $mode == diagnose ]]; then
     sizes=(16384)
     rounds=5
 elif [[ $mode == diagnose64 ]]; then
-    names=(uring tokio plain read64k read64plain vectored serial)
+    names=(uring tokio plain grow growplain read64k read64plain vectored serial)
     sizes=(65536)
-    rounds=7
+    rounds=5
 elif [[ $mode == verify ]]; then
     names=(base uring tokio)
     sizes=(128 16384 65536)
@@ -167,7 +169,7 @@ if [[ $mode == diagnose || $mode == diagnose64 ]]; then
             echo "perf unavailable on this runner" > "$key.perf.log"
         fi
         if command -v strace >/dev/null; then
-            sudo timeout -s INT 6 strace -f -c -p "$pid" -o "$key.syscalls.txt" > "$key.strace.log" 2>&1 &
+            sudo timeout -k 3 -s INT 6 strace -f -c -p "$pid" -o "$key.syscalls.txt" > "$key.strace.log" 2>&1 &
             tracer=$!
             for ((attempt=0; attempt<100; attempt++)); do
                 if awk '/^TracerPid:/ {exit $2 == 0}' "/proc/$pid/status"; then break; fi
@@ -179,6 +181,19 @@ if [[ $mode == diagnose || $mode == diagnose64 ]]; then
             wait "$tracer" || rc=$?
             [[ $rc == 124 ]]
             test -s "$key.syscalls.txt"
+        fi
+        if [[ $mode == diagnose64 && $name != tokio && -n $perf_bin ]] &&
+            sudo "$perf_bin" list 'io_uring:io_uring_submit_req' | grep -q io_uring_submit_req; then
+            sudo "$perf_bin" record -e io_uring:io_uring_submit_req -p "$pid" \
+                -o "$key.sqe.data" -- sleep 4 > "$key.sqe.log" 2>&1 &
+            recorder=$!
+            sleep 0.5
+            taskset -c "${cpus[1]}" target/release/echo-client "$BENCH_ADDR" 4 2 "$profile_size" > "$key.sqe-client.txt"
+            if wait "$recorder"; then
+                sudo "$perf_bin" script -i "$key.sqe.data" |
+                    sed -nE 's/.*opcode[= ]+([^ ,]+).*/\1/p' |
+                    sort | uniq -c > "$key.sqes.txt"
+            fi
         fi
         cleanup
     done
