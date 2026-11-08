@@ -21,8 +21,8 @@ pub mod connect;
 #[cfg(unix)]
 pub mod polling;
 
-#[cfg(unix)]
-pub use polling::UdpSocket;
+mod udp;
+pub use udp::UdpSocket;
 
 #[cfg(target_os = "linux")]
 pub mod uring;
@@ -36,11 +36,10 @@ mod helpers;
 #[allow(clippy::wrong_self_convention)]
 pub trait Reactor: Driver {
     /// Adopt UDP on backends with datagram support.
-    #[cfg(unix)]
     fn from_udp_socket(&self, _: net::UdpSocket) -> io::Result<UdpSocket> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "UDP requires the polling reactor",
+            "reactor does not support UDP",
         ))
     }
 

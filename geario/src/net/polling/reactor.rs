@@ -219,8 +219,10 @@ impl fmt::Debug for Reactor {
 }
 
 impl crate::net::Reactor for Reactor {
-    fn from_udp_socket(&self, socket: net::UdpSocket) -> io::Result<super::UdpSocket> {
-        super::UdpSocket::register(self, socket)
+    fn from_udp_socket(&self, socket: net::UdpSocket) -> io::Result<crate::net::UdpSocket> {
+        crate::net::UdpSocket::register(socket, |socket| {
+            super::udp::Registration::new(self, socket)
+        })
     }
 
     fn tcp_connect(&self, addr: net::SocketAddr, cfg: SharedCfg) -> Receiver<Io> {

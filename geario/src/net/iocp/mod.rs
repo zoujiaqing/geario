@@ -8,6 +8,7 @@ mod io;
 mod ops;
 mod reactor;
 mod stream;
+mod udp;
 
 pub use self::reactor::{Handler, Reactor, ReactorApi};
 

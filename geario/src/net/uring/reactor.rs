@@ -39,6 +39,8 @@ pub struct ReactorApi {
 }
 
 impl ReactorApi {
+    pub(super) const MAX_KEY: u64 = Reactor::DATA_MASK;
+
     #[inline]
     /// Check if kernel ver 6.1 or greater
     pub fn is_new(&self) -> bool {
@@ -66,9 +68,15 @@ impl ReactorApi {
     #[inline]
     /// Submit request to the driver.
     pub fn submit(&self, id: u32, entry: SEntry) {
+        self.submit_key(u64::from(id), entry);
+    }
+
+    #[inline]
+    pub(super) fn submit_key(&self, id: u64, entry: SEntry) {
+        debug_assert!(id <= Self::MAX_KEY);
         self.submit_inner(|en| {
             *en = entry;
-            en.set_user_data(u64::from(id) | self.batch);
+            en.set_user_data(id | self.batch);
         });
     }
 
@@ -87,8 +95,14 @@ impl ReactorApi {
     #[inline]
     /// Attempt to cancel an already issued request.
     pub fn cancel(&self, id: u32) {
+        self.cancel_key(u64::from(id));
+    }
+
+    #[inline]
+    pub(super) fn cancel_key(&self, id: u64) {
+        debug_assert!(id <= Self::MAX_KEY);
         self.submit_inner(|en| {
-            *en = AsyncCancel::new(u64::from(id) | self.batch)
+            *en = AsyncCancel::new(id | self.batch)
                 .build()
                 .user_data(Reactor::CANCEL);
         });
@@ -336,6 +350,12 @@ impl AsRawFd for Reactor {
 }
 
 impl crate::net::Reactor for Reactor {
+    fn from_udp_socket(&self, socket: net::UdpSocket) -> io::Result<crate::net::UdpSocket> {
+        crate::net::UdpSocket::register(socket, |socket| {
+            Ok(super::udp::Registration::new(self, socket))
+        })
+    }
+
     fn tcp_connect(&self, addr: net::SocketAddr, cfg: SharedCfg) -> Receiver<Io> {
         let addr = SockAddr::from(addr);
         let result = Socket::new(addr.domain(), Type::STREAM, Some(Protocol::TCP))

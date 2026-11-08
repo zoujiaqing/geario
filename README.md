@@ -96,8 +96,8 @@ Disable default features to omit the HTTP URI connector and the legacy
 HTTP-specific TLS query. With `rustls`, query `geario::tls::AlpnProtocol`
 for the negotiated bytes and interpret them in the application protocol.
 
-On macOS and Linux, `geario::net::UdpSocket` supports asynchronous
-`recv_from` and `send_to` on the polling reactor. Select `neon-polling`
-explicitly on Linux when using UDP. The io_uring backend currently returns
-`Unsupported` for UDP. The datagram API preserves message boundaries
-and supports a pending read and write on separate tasks on the same worker.
+`geario::net::UdpSocket` supports asynchronous `recv_from` and `send_to`
+on polling (Linux and macOS), io_uring (Linux) and the Windows IOCP runtime.
+It uses io_uring poll completions on Linux and Winsock readiness events
+on Windows to wake the worker. Datagrams preserve message boundaries and
+can have a pending read and write on separate tasks on the same worker.
