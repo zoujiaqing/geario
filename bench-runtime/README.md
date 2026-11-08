@@ -97,3 +97,57 @@ gap to Tokio narrowed from 11.8% to 6.3%. At 128 B the paired medians were
 −0.1%, +0.1%, and +0.9%, respectively. At 64 KiB they were −0.3%, −0.3%,
 and −0.1%. The [functional CI](https://github.com/zoujiaqing/geario/actions/runs/42467148169)
 passed for the measured code.
+
+The [64 KiB diagnostic run](https://github.com/zoujiaqing/geario/actions/runs/42469401135)
+kept the request size, client, worker count, and runner fixed. Five paired
+rounds separated the following changes:
+
+| Change at 64 KiB | Paired throughput | Paired CPU/request | Paired p99 |
+|---|---:|---:|---:|
+| Grow from 16 KiB directly to 64 KiB when the socket has more data | +31.6% | −24.4% | −23.5% |
+| Disable SendZc with the original read policy | +17.9% | −15.5% | −3.2% |
+| Grow directly and disable SendZc | +56.7% | −35.8% | −18.9% |
+| Batch 16 KiB slices with Writev instead of flushing each slice | +44.7% | −30.7% | +0.6% |
+
+The SQE trace counted about four receive submissions and one SendZc per
+baseline echo. Growing directly reduced that to two receive submissions.
+The original path also copied the accumulated prefix at each growth step.
+With full reads, the 16→32→48→64 KiB sequence copies 96 KiB of prefix,
+while 16→64 KiB copies 16 KiB. Those byte totals describe the code path
+under full reads. The receive and send submissions were counted directly
+in a separate instrumented run. Starting with a 64 KiB read allocation
+also changes the configuration and pool policy. It was slower than the
+burst-growth variant on this runner.
+
+The segmented comparison held read capacity and the plain send policy
+fixed. The serial version made roughly four send syscalls per request.
+The vectored version used approximately one Writev submission and
+performed similarly to one contiguous plain Send. There was no evidence
+for splitting an already-contiguous write.
+
+The production receive path starts at 16 KiB and uses a pooled 64 KiB
+page only when a default-sized page is nearly full and the receive path
+needs more space. Custom receive sizing retains its growth policy.
+The send path selects plain Send on known loopback TCP peers once at
+registration. For loopback, Linux can still copy zero-copy payloads and
+deliver a completion notification. See the [Linux kernel documentation](https://docs.kernel.org/next/networking/msg_zerocopy.html#loopback).
+
+The [production A/B](https://github.com/zoujiaqing/geario/actions/runs/42470174425)
+compared both changes with `515e853` on one AMD EPYC 7763 runner. There were
+nine paired rounds per size, with one worker and four persistent connections.
+
+| Size | Paired throughput | Paired CPU/request | Paired p99 |
+|---|---:|---:|---:|
+| 128 B | −0.6% | +0.8% | +0.3% |
+| 16 KiB | −0.2% | +0.2% | −2.6% |
+| 64 KiB | +67.4% | −40.3% | −27.5% |
+
+At 64 KiB, geario went from 13,903 to 23,275 RPS and from 71.91 to
+42.80 µs of server CPU per echo. Tokio reached 26,646 RPS at 37.39 µs
+CPU per echo. The paired throughput gap went from 47.7% to 13.3%.
+Geario's closed-loop p99 went from 346.2 to 247.8 µs, and Tokio's was
+252.2 µs. The 128 B throughput change was small but consistently negative
+in eight of nine rounds. Its paired bootstrap 95% interval was
+[−2.28%, −0.16%], within the previous 3% throughput tolerance.
+The [functional CI](https://github.com/zoujiaqing/geario/actions/runs/42470169264)
+passed, including the burst-prefix, write cancellation, and short-write tests.
