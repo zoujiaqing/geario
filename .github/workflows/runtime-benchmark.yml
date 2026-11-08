@@ -5,8 +5,12 @@ on:
     inputs:
       mode:
         type: choice
-        options: [compare, diagnose]
+        options: [compare, diagnose, verify]
         default: compare
+      baseline:
+        description: Commit to compare against in verify mode
+        type: string
+        default: 4a06cd04123f31c83f69c8510f7242716bf1e7ec
   push:
     branches: [main]
     paths:
@@ -22,6 +26,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install Linux diagnostics
         if: inputs.mode == 'diagnose'
         run: |
@@ -33,6 +39,7 @@ jobs:
       - name: Compare geario and Tokio over TCP loopback
         env:
           BENCH_MODE: ${{ inputs.mode || 'compare' }}
+          BENCH_BASE_REF: ${{ inputs.baseline }}
         run: |
           sudo prlimit --pid $$ --memlock=unlimited:unlimited 2>/dev/null || true
           bash bench-runtime/compare.sh "$RUNNER_TEMP/runtime-benchmark"

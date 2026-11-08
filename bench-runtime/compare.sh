@@ -21,8 +21,10 @@ fi
 
 mode=${BENCH_MODE:-compare}
 drivers=(polling uring)
-if [[ $mode == diagnose ]]; then
+if [[ $mode == diagnose || $mode == verify ]]; then
     drivers=(uring)
+fi
+if [[ $mode == diagnose ]]; then
     export RUSTFLAGS="${RUSTFLAGS:-} -C force-frame-pointers=yes -C debuginfo=1"
 fi
 
@@ -31,6 +33,22 @@ for driver in "${drivers[@]}"; do
     cargo build --locked --release --features "$driver"
     cp target/release/echo-geario "$result_dir/geario-$driver"
 done
+if [[ $mode == verify ]]; then
+    base=$(git rev-parse --verify "${BENCH_BASE_REF:?missing baseline commit}^{commit}")
+    echo "baseline=$base" >> "$result_dir/environment.txt"
+    baseline=$(mktemp -d)
+    trap 'git worktree remove --force "$baseline"' EXIT
+    git worktree add --detach "$baseline" "$base"
+    # Keep both harnesses identical, including the dependency lock.
+    cp -R Cargo.toml Cargo.lock src "$baseline/bench-runtime/"
+    cp ../bench-echo/server-geario/src/main.rs "$baseline/bench-echo/server-geario/src/"
+    cp ../bench-echo/client/src/main.rs "$baseline/bench-echo/client/src/"
+    CARGO_TARGET_DIR="$PWD/target" cargo build --manifest-path "$baseline/bench-runtime/Cargo.toml" \
+        --locked --release --features uring --bin echo-geario
+    cp target/release/echo-geario "$result_dir/geario-base"
+    git worktree remove --force "$baseline"
+    trap - EXIT
+fi
 sha256sum "$result_dir"/geario-* target/release/echo-{tokio,client} \
     > "$result_dir/binaries.sha256"
 
@@ -73,6 +91,7 @@ server_command() {
         tokio) command=(target/release/echo-tokio) ;;
         polling) command=("$result_dir/geario-polling") ;;
         uring) ;;
+        base) command=("$result_dir/geario-base") ;;
         plain) command=(env GEARIO_URING_ZC_SIZE=4294967295 "${command[@]}") ;;
         read32k) command=(env BENCH_READ_CAPACITY=32744 "${command[@]}") ;;
         direct) command=(env BENCH_DIRECT_WRITE=1 "${command[@]}") ;;
@@ -103,6 +122,10 @@ if [[ $mode == diagnose ]]; then
     names=(uring tokio plain read32k direct)
     sizes=(16384)
     rounds=5
+elif [[ $mode == verify ]]; then
+    names=(base uring tokio)
+    sizes=(128 16384)
+    rounds=9
 else
     names=(polling uring tokio)
     sizes=(128 16384)
