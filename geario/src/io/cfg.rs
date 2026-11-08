@@ -407,6 +407,34 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn read_ahead_borrows_only_a_released_default_page() {
+        std::thread::spawn(|| {
+            let default = IoConfig::default();
+            let read = default.read_buf();
+            assert!(read.take_cached_read_burst().is_none());
+
+            let mut page = BytesMut::with_page_size(BytePageSize::Size64);
+            page.resize(BytePageSize::Size64.capacity(), 1);
+            let ptr = page.as_ptr();
+            let slice = page.split_to(page.len());
+            read.release(page);
+            assert!(read.take_cached_read_burst().is_none());
+            drop(slice);
+
+            let custom = IoConfig::default().set_read_buf(DEFAULT_READ_HIGH, 536, 128);
+            assert!(custom.read_buf().take_cached_read_burst().is_none());
+
+            let borrowed = read.take_cached_read_burst().expect("released page");
+            assert_eq!(borrowed.as_ptr(), ptr);
+            assert_eq!(borrowed.capacity(), BytePageSize::Size64.capacity());
+            assert!(borrowed.is_empty());
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn burst_growth_preserves_the_prefix_and_custom_capacity_policy() {
         let default = IoConfig::default();
         let cfg = default.read_buf();
