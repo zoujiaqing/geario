@@ -6,7 +6,7 @@ use crate::util::{time::Millis, time::Seconds};
 
 const DEFAULT_CACHE_SIZE: usize = 128;
 // Keep space for a full 16 KiB of payload in the default read allocation.
-const DEFAULT_READ_HIGH: usize = 16 * 1024;
+const DEFAULT_READ_HIGH: usize = BytePageSize::Size16.capacity();
 const DEFAULT_HIGH: usize = 16 * 1024 - 24;
 const DEFAULT_LOW: usize = 512 + 24;
 const DEFAULT_HALF: usize = (16 * 1024 - 24) / 2;
@@ -68,6 +68,7 @@ pub struct BufConfig {
     idx: usize,
     first: bool,
     cache_size: usize,
+    recycle_read_page: bool,
 }
 
 impl IoConfig {
@@ -92,6 +93,7 @@ impl IoConfig {
                 half: DEFAULT_READ_HIGH / 2,
                 first: true,
                 cache_size: DEFAULT_CACHE_SIZE,
+                recycle_read_page: true,
             },
             write_buf: BufConfig {
                 idx,
@@ -100,6 +102,7 @@ impl IoConfig {
                 half: DEFAULT_HALF,
                 first: false,
                 cache_size: DEFAULT_CACHE_SIZE,
+                recycle_read_page: false,
             },
             write_page_size: BytePageSize::Size16,
             write_buf_threshold: BytePageSize::Size16.half_capacity(),
@@ -228,6 +231,8 @@ impl IoConfig {
         low_watermark: usize,
         cache_size: usize,
     ) -> Self {
+        // Explicit read-buffer sizing retains the per-config cache policy.
+        self.read_buf.recycle_read_page = false;
         self.read_buf.cache_size = cache_size;
         self.read_buf.high = high_watermark;
         self.read_buf.low = low_watermark;
@@ -286,7 +291,14 @@ impl BufConfig {
     #[inline]
     /// Get buffer
     pub fn get(&self) -> BytesMut {
-        if let Some(buf) = CACHE.with(|c| c.with(self.idx, self.first, |c: &mut Vec<_>| c.pop())) {
+        if self.recycle_read_page {
+            // A codec can take the entire read page. Its original capacity
+            // then disappears from the mutable tail, so only the backing
+            // allocation can return to the pool after its final reference.
+            BytesMut::with_page_size(BytePageSize::Size16)
+        } else if let Some(buf) =
+            CACHE.with(|c| c.with(self.idx, self.first, |c: &mut Vec<_>| c.pop()))
+        {
             buf
         } else {
             BytesMut::with_capacity(self.high)
@@ -318,6 +330,11 @@ impl BufConfig {
     #[inline]
     /// Release buffer, buf must be allocated from this pool
     pub fn release(&self, mut buf: BytesMut) {
+        if self.recycle_read_page {
+            // The page pool owns recycling, including when a slice outlives
+            // this mutable tail.
+            return;
+        }
         let cap = buf.capacity();
         if cap > self.low && cap <= self.high {
             CACHE.with(|c| {
@@ -357,5 +374,31 @@ impl LocalCache {
         } else {
             f(&mut cache[idx].1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_read_page_waits_for_its_last_slice_before_recycling() {
+        let config = IoConfig::default();
+        let read = config.read_buf();
+        let mut page = read.get();
+        page.resize(DEFAULT_READ_HIGH, 0x31);
+        let original = page.as_ptr();
+        let slice = page.split_to(page.len());
+        read.release(page);
+
+        let other = read.get();
+        assert_ne!(original, other.as_ptr());
+        assert!(slice.iter().all(|&byte| byte == 0x31));
+        drop(slice);
+
+        let recycled = read.get();
+        assert_eq!(recycled.as_ptr(), original);
+        assert!(recycled.is_empty());
+        assert_eq!(recycled.capacity(), DEFAULT_READ_HIGH);
     }
 }

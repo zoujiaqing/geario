@@ -84,6 +84,12 @@ impl BytesMut {
         }
     }
 
+    pub(crate) fn with_page_size(size: crate::bytes::BytePageSize) -> Self {
+        Self {
+            storage: StorageVec::sized(size),
+        }
+    }
+
     /// Creates a new `BytesMut` from slice, by copying it.
     #[inline]
     #[must_use]
