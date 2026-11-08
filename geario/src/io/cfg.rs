@@ -5,6 +5,8 @@ use crate::service::cfg::{CfgContext, Configuration};
 use crate::util::{time::Millis, time::Seconds};
 
 const DEFAULT_CACHE_SIZE: usize = 128;
+// Keep space for a full 16 KiB of payload in the default read allocation.
+const DEFAULT_READ_HIGH: usize = 16 * 1024;
 const DEFAULT_HIGH: usize = 16 * 1024 - 24;
 const DEFAULT_LOW: usize = 512 + 24;
 const DEFAULT_HALF: usize = (16 * 1024 - 24) / 2;
@@ -85,9 +87,9 @@ impl IoConfig {
 
             read_buf: BufConfig {
                 idx,
-                high: DEFAULT_HIGH,
+                high: DEFAULT_READ_HIGH,
                 low: DEFAULT_LOW,
-                half: DEFAULT_HALF,
+                half: DEFAULT_READ_HIGH / 2,
                 first: true,
                 cache_size: DEFAULT_CACHE_SIZE,
             },
