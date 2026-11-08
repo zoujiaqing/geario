@@ -256,16 +256,25 @@ impl StreamOps {
         ctx: IoContext,
         zc: bool,
     ) -> (StreamCtl, WeakStreamCtl) {
+        let mut flags = self.0.default_flags;
+        // Loopback TCP copies the data even for zero-copy sends. Avoid page
+        // pinning and the extra notification on known loopback peers.
+        if !zc
+            || (!flags.contains(Flags::NO_ZC)
+                && io
+                    .peer_addr()
+                    .ok()
+                    .and_then(|addr| addr.as_socket())
+                    .is_some_and(|addr| addr.ip().to_canonical().is_loopback()))
+        {
+            flags.insert(Flags::NO_ZC);
+        }
         let item = StreamItem {
             io,
             ctx,
             rd_op: None,
             wr_op: None,
-            flags: if zc {
-                self.0.default_flags
-            } else {
-                Flags::NO_ZC
-            },
+            flags,
         };
 
         let id = self.0.with(|st| {
