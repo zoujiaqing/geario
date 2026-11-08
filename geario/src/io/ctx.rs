@@ -159,6 +159,14 @@ impl IoContext {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn can_send_inline(&self, sizes: std::ops::RangeInclusive<usize>) -> bool {
+        let st = self.st();
+        sizes.contains(&st.buffer.write_buf_size())
+            && !st.flags.is_stopping_any()
+            && st.filter().is_transparent()
+    }
+
     /// Gets the write buffer.
     pub fn with_write_buf<F, R>(&self, f: F) -> R
     where

@@ -28,6 +28,10 @@ impl crate::io::IoStream for super::UnixStream {
 struct HandleWrapper(WeakStreamCtl);
 
 impl Handle for HandleWrapper {
+    fn write(&self, ctx: &IoContext) {
+        self.0.try_send_inline(ctx);
+    }
+
     fn write_bufs(
         &self,
         _: &IoContext,

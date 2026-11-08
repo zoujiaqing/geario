@@ -903,6 +903,18 @@ impl WeakStreamCtl {
         self.inner.with(|storage| f(&storage.streams[self.id].io))
     }
 
+    pub(crate) fn try_send_inline(&self, ctx: &IoContext) {
+        if !ctx.can_send_inline(DIRECT_SEND_MIN..=DIRECT_SEND_MAX) {
+            return;
+        }
+        // Filter callbacks and completions can already be using the slab.
+        // Leave the usual write task to take over if it is busy.
+        if let Some(mut storage) = self.inner.storage.take() {
+            storage.send(self.id, &self.inner.api);
+            self.inner.storage.set(Some(storage));
+        }
+    }
+
     /// Write `bufs` straight to the socket.
     ///
     /// `None` when the storage is busy, or when a send is already in flight:
@@ -1040,7 +1052,6 @@ mod write_path_tests {
 
         ops.0.with(|st| {
             let id = st.streams.iter().next().unwrap().0;
-            st.send(id, &ops.0.api);
             let op = st.streams[id].wr_op.unwrap();
             let Some(Operation::Send { buf, .. }) = &st.ops[op.get() as usize] else {
                 panic!("expected a single send for the remaining bytes");
